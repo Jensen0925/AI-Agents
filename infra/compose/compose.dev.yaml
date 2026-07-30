@@ -1,0 +1,39 @@
+services:
+  chat:
+    working_dir: /workspace
+    command:
+      - sh
+      - -c
+      - bun install --frozen-lockfile && bun run dev:chat
+    environment:
+      NODE_ENV: development
+      PORT: 4001
+    volumes:
+      - ../..:/workspace
+      - chat_root_node_modules:/workspace/node_modules
+      - chat_workspace_node_modules:/workspace/services/chat/node_modules
+      - chat_contracts_node_modules:/workspace/packages/contracts/node_modules
+
+  chat-web:
+    working_dir: /workspace
+    command:
+      - sh
+      - -c
+      - bun install --frozen-lockfile && bun run dev:chat-web
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_BASE_URL: http://chat:4001
+      PORT: 3002
+    volumes:
+      - ../..:/workspace
+      - web_root_node_modules:/workspace/node_modules
+      - web_workspace_node_modules:/workspace/clients/chat-web/node_modules
+      - web_contracts_node_modules:/workspace/packages/contracts/node_modules
+
+volumes:
+  chat_root_node_modules:
+  chat_workspace_node_modules:
+  chat_contracts_node_modules:
+  web_root_node_modules:
+  web_workspace_node_modules:
+  web_contracts_node_modules:

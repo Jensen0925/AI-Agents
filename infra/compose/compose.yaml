@@ -1,0 +1,36 @@
+name: autix
+
+services:
+  chat:
+    build:
+      context: ../..
+      dockerfile: services/chat/Dockerfile
+    environment:
+      PORT: 4001
+    ports:
+      - "4001:4001"
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - "const response = await fetch('http://127.0.0.1:4001/health'); if (!response.ok) process.exit(1);"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  chat-web:
+    build:
+      context: ../..
+      dockerfile: clients/chat-web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://chat:4001
+    environment:
+      PORT: 3002
+    ports:
+      - "3002:3002"
+    depends_on:
+      chat:
+        condition: service_healthy
+
