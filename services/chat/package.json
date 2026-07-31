@@ -6,15 +6,21 @@
     "dev": "bun --watch src/main.ts",
     "build": "bun build src/main.ts --outdir dist --target bun --packages external",
     "start": "bun dist/main.js",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@autix/contracts": "workspace:*",
+    "@langchain/core": "^1.2.3",
+    "@langchain/openai": "^1.5.5",
     "@nestjs/common": "11.1.6",
     "@nestjs/core": "11.1.6",
     "@nestjs/platform-express": "11.1.6",
+    "js-yaml": "^5.2.2",
+    "langchain": "^1.5.4",
     "reflect-metadata": "0.2.2",
-    "rxjs": "7.8.2"
+    "rxjs": "7.8.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@nestjs/cli": "11.0.10",

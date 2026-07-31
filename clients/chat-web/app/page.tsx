@@ -1,35 +1,40 @@
 "use client";
 
-import { APP_NAME } from "@autix/contracts";
-import { Check, LoaderCircle, Send, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { APP_NAME, type RequirementResult } from "@autix/contracts";
+import { Braces, LoaderCircle, Send, TriangleAlert } from "lucide-react";
+import { type FormEvent, useState } from "react";
 
 type RequestState = "idle" | "loading" | "success" | "error";
 
-interface HelloResponse {
-  message: string;
-}
+const DEFAULT_INPUT = "用户注册时必须绑定手机号，密码至少8位";
 
 export default function Home() {
+  const [input, setInput] = useState(DEFAULT_INPUT);
   const [requestState, setRequestState] = useState<RequestState>("idle");
-  const [message, setMessage] = useState("Ready for a round trip.");
+  const [result, setResult] = useState<RequirementResult | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
 
-  async function callChat() {
+  async function extractRequirement(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setRequestState("loading");
-    setMessage("Contacting Chat...");
+    setErrorMessage("");
 
     try {
-      const response = await fetch("/api/hello");
+      const response = await fetch("/api/requirement/extract", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input }),
+      });
 
       if (!response.ok) {
-        throw new Error(`Chat responded with status ${response.status}`);
+        throw new Error(`请求失败，状态码 ${response.status}`);
       }
 
-      const data = (await response.json()) as HelloResponse;
-      setMessage(data.message);
+      const data = (await response.json()) as RequirementResult;
+      setResult(data);
       setRequestState("success");
-    } catch {
-      setMessage("Chat service is unavailable.");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "抽取请求失败");
       setRequestState("error");
     }
   }
@@ -37,8 +42,9 @@ export default function Home() {
   return (
     <main className="shell">
       <header className="topbar">
-        <div className="wordmark" aria-label={`${APP_NAME} home`}>
-          {APP_NAME}
+        <div className="wordmark" aria-label={`${APP_NAME} requirement extractor`}>
+          <Braces aria-hidden="true" />
+          <span>{APP_NAME}</span>
         </div>
         <div className="environment">
           <span className="environment-dot" aria-hidden="true" />
@@ -46,48 +52,56 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="workspace" aria-labelledby="page-title">
+      <main className="workspace" aria-labelledby="page-title">
         <div className="intro">
-          <p className="eyebrow">Shared contract / live service</p>
-          <h1 id="page-title">{APP_NAME}</h1>
-          <p className="lede">
-            One request from the browser, through the web app, to the Chat API.
-          </p>
+          <p className="eyebrow">LangChain / structured output</p>
+          <h1 id="page-title">需求结构化抽取</h1>
+          <span className={`state state-${requestState}`}>{requestState}</span>
         </div>
 
-        <div className="console">
-          <div className="console-heading">
-            <div>
-              <p className="console-label">Chat service</p>
-              <p className="endpoint">GET /hello</p>
+        <div className="extractor">
+          <form className="input-pane" onSubmit={extractRequirement}>
+            <div className="pane-heading">
+              <label htmlFor="requirement-input">需求输入</label>
+              <span>{input.length} 字</span>
             </div>
-            <span className={`state state-${requestState}`}>{requestState}</span>
-          </div>
+            <textarea
+              id="requirement-input"
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              rows={10}
+              required
+            />
+            <button
+              className="submit-button"
+              type="submit"
+              disabled={requestState === "loading" || input.trim().length === 0}
+            >
+              {requestState === "loading" ? (
+                <LoaderCircle className="spin" aria-hidden="true" />
+              ) : (
+                <Send aria-hidden="true" />
+              )}
+              {requestState === "loading" ? "抽取中" : "开始抽取"}
+            </button>
+          </form>
 
-          <div className="response" aria-live="polite" aria-atomic="true">
-            {requestState === "loading" && (
-              <LoaderCircle className="response-icon spin" aria-hidden="true" />
+          <section className="output-pane" aria-live="polite" aria-atomic="true">
+            <div className="pane-heading">
+              <span>JSON 结果</span>
+              <span>POST /requirement/extract</span>
+            </div>
+            {requestState === "error" ? (
+              <div className="error-message">
+                <TriangleAlert aria-hidden="true" />
+                <span>{errorMessage}</span>
+              </div>
+            ) : (
+              <pre>{result ? JSON.stringify(result, null, 2) : "{}"}</pre>
             )}
-            {requestState === "success" && (
-              <Check className="response-icon success-icon" aria-hidden="true" />
-            )}
-            {requestState === "error" && (
-              <TriangleAlert className="response-icon error-icon" aria-hidden="true" />
-            )}
-            <p>{message}</p>
-          </div>
-
-          <button
-            className="call-button"
-            type="button"
-            onClick={callChat}
-            disabled={requestState === "loading"}
-          >
-            <Send aria-hidden="true" />
-            {requestState === "loading" ? "Calling Chat" : "Call Chat service"}
-          </button>
+          </section>
         </div>
-      </section>
+      </main>
 
       <footer className="footer">
         <span>chat-web :3002</span>

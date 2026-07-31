@@ -1,0 +1,20 @@
+llm:
+  model: gpt-5.6-sol
+  temperature: 0
+  maxTokens: 1024
+  timeoutMs: 30000
+  maxRetries: 2
+  batchSize: 2
+  maxConcurrency: 2
+
+retrieval:
+  enabled: false
+  topK: 4
+
+tools:
+  enabled: false
+  allowList: []
+
+features:
+  streaming: true
+  batch: true
