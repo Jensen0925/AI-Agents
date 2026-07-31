@@ -1,5 +1,5 @@
 llm:
-  model: gpt-5.6-sol
+  model: gpt-5.6-luna
   temperature: 0
   maxTokens: 1024
   timeoutMs: 30000
