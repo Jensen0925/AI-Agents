@@ -1,5 +1,5 @@
 {
-  "name": "@autix/chat-web",
+  "name": "@cloudsage/chat-web",
   "version": "0.0.0",
   "private": true,
   "scripts": {
@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@autix/contracts": "workspace:*",
+    "@cloudsage/contracts": "workspace:*",
     "lucide-react": "0.468.0",
     "next": "15.5.9",
     "react": "19.1.1",

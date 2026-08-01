@@ -95,21 +95,28 @@ function toolOutputToText(output: unknown): string {
   }
 }
 
+/**
+ * 集中实现基础模型、Prompt、Runnable Chain 与工具调用示例。
+ * 所有模型实例均来自统一工厂，运行参数由 LangChain YAML 配置控制。
+ */
 @Injectable()
 export class LlmService {
   private model?: ChatOpenAI;
 
+  /** 懒加载并复用统一工厂创建的聊天模型。 */
   private getModel(): ChatOpenAI {
     // 懒加载让健康检查在尚未配置模型密钥时仍可正常工作。
     this.model ??= createChatModel();
     return this.model;
   }
 
+  /** 使用固定测试输入渲染 system 与 human 消息。 */
   private createMessages() {
     // 所有调用方式都从同一个 ChatPromptTemplate 格式化消息。
     return formatRequirementMessages(LANGCHAIN_USER_INPUT);
   }
 
+  /** 为工具示例追加明确的工具使用指令。 */
   private async createToolMessages() {
     const messages = await this.createMessages();
 
@@ -117,6 +124,7 @@ export class LlmService {
     return [...messages, new HumanMessage(TOOL_USAGE_INSTRUCTION)];
   }
 
+  /** 单次调用模型并返回归一化后的文本内容。 */
   async invoke(): Promise<InvokeResult> {
     const messages = await this.createMessages();
     const response = await this.getModel().invoke(messages);
@@ -128,6 +136,7 @@ export class LlmService {
     };
   }
 
+  /** 流式调用模型，逐段产出非空文本。 */
   async *stream(): AsyncGenerator<string> {
     const { features } = loadLangchainConfig();
 
@@ -147,6 +156,7 @@ export class LlmService {
     }
   }
 
+  /** 根据 YAML 中的批量大小和并发数执行基础模型批处理。 */
   async batch(): Promise<BatchResult> {
     const { llm, features } = loadLangchainConfig();
 
@@ -169,6 +179,7 @@ export class LlmService {
     };
   }
 
+  /** 只渲染 Prompt 消息，用于检查角色与最终提示内容，不调用模型。 */
   async promptPreview(): Promise<PromptPreviewResult> {
     const messages = await this.createMessages();
 
@@ -181,6 +192,7 @@ export class LlmService {
     };
   }
 
+  /** 展示 Prompt formatMessages 后直接调用模型的最小链路。 */
   async promptToModel(): Promise<InvokeResult> {
     // 示例链路：模板变量 -> formatMessages -> 统一模型工厂实例。
     const messages = await formatRequirementMessages(LANGCHAIN_USER_INPUT);
@@ -192,6 +204,7 @@ export class LlmService {
     };
   }
 
+  /** 调用由 Prompt、模型和 StringOutputParser 组成的 Runnable Chain。 */
   async chainInvoke(): Promise<InvokeResult> {
     const message = await requirementChain.invoke({
       input: LANGCHAIN_USER_INPUT,
@@ -203,6 +216,7 @@ export class LlmService {
     };
   }
 
+  /** 流式执行 Runnable Chain，并逐段产出解析后的字符串。 */
   async *chainStream(): AsyncGenerator<string> {
     const { features } = loadLangchainConfig();
 
@@ -221,6 +235,7 @@ export class LlmService {
     }
   }
 
+  /** 按 YAML 配置批量执行 Runnable Chain。 */
   async chainBatch(): Promise<BatchResult> {
     const { llm, features } = loadLangchainConfig();
 
@@ -242,6 +257,7 @@ export class LlmService {
     };
   }
 
+  /** 将基础工具绑定到模型，仅返回模型提出的工具调用，不执行工具。 */
   async toolBind(): Promise<ToolBindResult> {
     const messages = await this.createToolMessages();
     const modelWithTools = this.getModel().bindTools(basicTools);
@@ -258,6 +274,10 @@ export class LlmService {
     };
   }
 
+  /**
+   * 执行模型提出的工具调用并把 ToolMessage 回传，直到模型生成最终答案。
+   * 最大轮次用于防止模型持续调用工具造成无限循环。
+   */
   async toolLoop(): Promise<ToolLoopResult> {
     const messages = await this.createToolMessages();
     const modelWithTools = this.getModel().bindTools(basicTools);

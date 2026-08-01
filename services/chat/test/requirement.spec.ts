@@ -1,5 +1,5 @@
 import { describe, expect, it, mock } from "bun:test";
-import type { RequirementResult } from "@autix/contracts";
+import type { RequirementResult } from "@cloudsage/contracts";
 import { METHOD_METADATA, PATH_METADATA } from "@nestjs/common/constants";
 import { RequestMethod } from "@nestjs/common";
 import { AppController } from "../src/app.controller";

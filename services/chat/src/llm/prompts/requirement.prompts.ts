@@ -7,7 +7,10 @@ export const extractPrompt = ChatPromptTemplate.fromMessages([
 只输出合法 JSON，不要使用 Markdown 代码块。JSON 字段必须为：
 {{"title":"","actors":[],"goals":[],"functionalRequirements":[],"nonFunctionalRequirements":[],"constraints":[],"unknowns":[]}}`,
   ],
-  ["human", "用户需求：\n{input}"],
+  [
+    "human",
+    "会话与当前需求：\n{input}\n\n检索到的参考资料：\n{retrievedContext}",
+  ],
 ]);
 
 export const clarifyPrompt = ChatPromptTemplate.fromMessages([
@@ -18,7 +21,10 @@ export const clarifyPrompt = ChatPromptTemplate.fromMessages([
 只输出合法 JSON，不要使用 Markdown 代码块：
 {{"needsClarification":false,"questions":[]}}`,
   ],
-  ["human", "用户原文：\n{input}\n\n已抽取字段：\n{extracted}"],
+  [
+    "human",
+    "会话与当前需求：\n{input}\n\n检索到的参考资料：\n{retrievedContext}\n\n已抽取字段：\n{extracted}",
+  ],
 ]);
 
 export const analysisPrompt = ChatPromptTemplate.fromMessages([
@@ -28,7 +34,10 @@ export const analysisPrompt = ChatPromptTemplate.fromMessages([
 输出应覆盖：功能分解、用户故事、验收标准、外部依赖与实施建议。
 明确区分已知事实、合理分析和待确认事项，不得编造业务事实。`,
   ],
-  ["human", "用户原文：\n{input}\n\n已抽取字段：\n{extracted}"],
+  [
+    "human",
+    "会话与当前需求：\n{input}\n\n检索到的参考资料：\n{retrievedContext}\n\n已抽取字段：\n{extracted}",
+  ],
 ]);
 
 export const riskPrompt = ChatPromptTemplate.fromMessages([
@@ -37,7 +46,10 @@ export const riskPrompt = ChatPromptTemplate.fromMessages([
     `你是需求风险 Agent。识别需求在范围、技术、数据、安全、合规、交付和验收方面的风险。
 逐项给出风险等级、触发条件、影响和缓解建议；没有依据的风险应标记为待确认。`,
   ],
-  ["human", "用户原文：\n{input}\n\n已抽取字段：\n{extracted}"],
+  [
+    "human",
+    "会话与当前需求：\n{input}\n\n检索到的参考资料：\n{retrievedContext}\n\n已抽取字段：\n{extracted}",
+  ],
 ]);
 
 export const summaryPrompt = ChatPromptTemplate.fromMessages([
@@ -49,6 +61,6 @@ export const summaryPrompt = ChatPromptTemplate.fromMessages([
   ],
   [
     "human",
-    "用户原文：\n{input}\n\n结构化字段：\n{extracted}\n\n多维度分析：\n{analysis}\n\n风险评估：\n{risks}",
+    "会话与当前需求：\n{input}\n\n检索到的参考资料：\n{retrievedContext}\n\n结构化字段：\n{extracted}\n\n多维度分析：\n{analysis}\n\n风险评估：\n{risks}",
   ],
 ]);

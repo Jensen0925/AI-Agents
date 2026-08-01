@@ -11,10 +11,6 @@ import {
   type OrchestrationResult,
   OrchestratorService,
 } from "./agents/orchestrator.service";
-import {
-  type AdvancedAnalysisResult,
-  AdvancedAnalysisService,
-} from "./advanced-analysis.service";
 import { EmbeddingService } from "./embedding/embedding.service";
 import {
   type VectorSearchResult,
@@ -56,10 +52,6 @@ interface OrchestrateBody {
   input: string;
 }
 
-interface AnalyzeBody {
-  sessionId: string;
-  input: string;
-}
 
 function requireText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -177,19 +169,5 @@ export class AgentsController {
     return this.orchestratorService.orchestrate(
       requireText(body?.input, "input"),
     );
-  }
-}
-
-@Controller("api/advanced")
-export class AdvancedController {
-  constructor(
-    private readonly advancedAnalysisService: AdvancedAnalysisService,
-  ) {}
-
-  @Post("analyze")
-  analyze(@Body() body: AnalyzeBody): Promise<AdvancedAnalysisResult> {
-    const sessionId = requireText(body?.sessionId, "sessionId");
-    const input = requireText(body?.input, "input");
-    return this.advancedAnalysisService.analyze(sessionId, input);
   }
 }

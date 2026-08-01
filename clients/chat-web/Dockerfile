@@ -18,7 +18,7 @@ COPY turbo.json tsconfig.base.json ./
 COPY clients/chat-web clients/chat-web
 COPY packages/contracts packages/contracts
 
-RUN bun run build --filter=@autix/chat-web
+RUN bun run build --filter=@cloudsage/chat-web
 
 FROM oven/bun:1.3.12 AS runner
 

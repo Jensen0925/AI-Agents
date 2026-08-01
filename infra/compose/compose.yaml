@@ -1,11 +1,31 @@
-name: autix
+name: cloudsage
 
 services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cloudsage
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres -d cloudsage
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   chat:
     build:
       context: ../..
       dockerfile: services/chat/Dockerfile
     environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cloudsage
       PORT: 4001
     ports:
       - "4001:4001"
@@ -19,6 +39,9 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   chat-web:
     build:
@@ -34,3 +57,5 @@ services:
       chat:
         condition: service_healthy
 
+volumes:
+  postgres_data:

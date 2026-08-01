@@ -1,4 +1,4 @@
-import { APP_NAME, type RequirementResult } from "@autix/contracts";
+import { APP_NAME, type RequirementResult } from "@cloudsage/contracts";
 import { BadRequestException, Body, Controller, Get, Post } from "@nestjs/common";
 import { RequirementService } from "./llm/requirement.service";
 

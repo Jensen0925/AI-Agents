@@ -1,8 +1,5 @@
-import { InMemoryChatMessageHistory } from "@langchain/core/chat_history";
 import {
-  AIMessage,
   type BaseMessage,
-  HumanMessage,
   trimMessages,
 } from "@langchain/core/messages";
 import { ChatPromptTemplate, MessagesPlaceholder } from "@langchain/core/prompts";
@@ -12,6 +9,9 @@ import {
   type Runnable,
 } from "@langchain/core/runnables";
 import { Injectable } from "@nestjs/common";
+import { MessageRole } from "@prisma/client";
+import { DbChatHistory } from "../../message/db-chat-history";
+import { MessageService } from "../../message/message.service";
 import { createChatModel } from "../model.factory";
 
 const MEMORY_SYSTEM_PROMPT = `
@@ -73,25 +73,20 @@ function contentToText(content: unknown): string {
     .join("");
 }
 
+/**
+ * 使用 RunnableWithMessageHistory 将需求分析模型接入 PostgreSQL 会话历史。
+ * 对外沿用 sessionId 命名，数据库中该值对应 conversationId。
+ */
 @Injectable()
 export class RunnableMemoryService {
-  private readonly histories = new Map<
-    string,
-    InMemoryChatMessageHistory
-  >();
   private conversation?: Runnable<MemoryRunnableInput, BaseMessage>;
 
-  private getOrCreateHistory(sessionId: string): InMemoryChatMessageHistory {
-    let history = this.histories.get(sessionId);
+  constructor(private readonly messageService: MessageService) {}
 
-    if (!history) {
-      history = new InMemoryChatMessageHistory();
-      this.histories.set(sessionId, history);
-    }
-
-    return history;
-  }
-
+  /**
+   * 懒加载带历史记录的 Runnable，并在每次模型调用前保留最近 2000 tokens。
+   * DbChatHistory 负责将 Runnable 的消息读写映射到 messages 表。
+   */
   private getConversation(): Runnable<MemoryRunnableInput, BaseMessage> {
     if (this.conversation) {
       return this.conversation;
@@ -103,8 +98,8 @@ export class RunnableMemoryService {
       async (values: MemoryRunnableInput): Promise<MemoryRunnableInput> => ({
         ...values,
         history: await trimMessages(values.history ?? [], {
-          maxTokens: 2000,//允许的最大总 token，超过就裁剪旧消息
-          strategy: "last",//裁剪策略 first：删除最前面的消息（默认，聊天场景最常用）last：删除末尾（极少用）
+          maxTokens: 2000,
+          strategy: "last",
           tokenCounter: model,
         }),
       }),
@@ -114,7 +109,7 @@ export class RunnableMemoryService {
     this.conversation = new RunnableWithMessageHistory({
       runnable: trimmedConversation,
       getMessageHistory: (sessionId: string) =>
-        this.getOrCreateHistory(sessionId),
+        new DbChatHistory(sessionId, this.messageService),
       inputMessagesKey: "input",
       historyMessagesKey: "history",
     });
@@ -122,6 +117,7 @@ export class RunnableMemoryService {
     return this.conversation;
   }
 
+  /** 在指定会话中执行一轮对话，并返回模型结果及更新后的完整历史。 */
   async chat(sessionId: string, input: string): Promise<MemoryChatResult> {
     const response = await this.getConversation().invoke(
       { input },
@@ -135,35 +131,38 @@ export class RunnableMemoryService {
     };
   }
 
+  /** 读取指定会话历史，并转换为前端使用的 human/ai 角色。 */
   async getHistory(sessionId: string): Promise<MemoryHistoryMessage[]> {
-    const history = this.histories.get(sessionId);
-
-    if (!history) {
-      return [];
-    }
-
-    const messages = await history.getMessages();
+    const messages = await this.messageService.getHistory(sessionId);
     return messages.map((message) => ({
-      role: message.getType(),
-      content: contentToText(message.content),
+      role: message.role === MessageRole.USER ? "human" : "ai",
+      content: message.content,
     }));
   }
 
+  /**
+   * 直接追加一组用户和助手消息，不调用模型。
+   * 适用于保存其他分析流程已经生成的最终结论。
+   */
   async appendMessage(
     sessionId: string,
     human: string,
     ai: string,
   ): Promise<void> {
-    const history = this.getOrCreateHistory(sessionId);
-    await history.addMessages([new HumanMessage(human), new AIMessage(ai)]);
+    await this.messageService.addMessage(
+      sessionId,
+      MessageRole.USER,
+      human,
+    );
+    await this.messageService.addMessage(
+      sessionId,
+      MessageRole.ASSISTANT,
+      ai,
+    );
   }
 
+  /** 清空指定会话的持久化消息，但不删除会话记录。 */
   async clearSession(sessionId: string): Promise<void> {
-    const history = this.histories.get(sessionId);
-
-    if (history) {
-      await history.clear();
-      this.histories.delete(sessionId);
-    }
+    await this.messageService.clearHistory(sessionId);
   }
 }

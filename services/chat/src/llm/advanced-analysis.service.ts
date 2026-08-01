@@ -1,81 +1,126 @@
-import { createHash } from "node:crypto";
+import {
+  AIMessage,
+  HumanMessage,
+  type MessageContent,
+} from "@langchain/core/messages";
 import { Injectable } from "@nestjs/common";
 import {
+  type DocumentSearchResult,
+  SearchService,
+} from "../document/search.service";
+import { DbChatHistory } from "../message/db-chat-history";
+import { MessageService } from "../message/message.service";
+import {
+  type RequirementAgentName,
   type OrchestrationResult,
   OrchestratorService,
 } from "./agents/orchestrator.service";
-import { FilesystemService } from "./filesystem/filesystem.service";
-import { RunnableMemoryService } from "./memory/runnable-memory.service";
 
-export interface AdvancedAnalysisResult extends OrchestrationResult {
-  sessionId: string;
-  reportPath: string | null;
+export interface AdvancedAnalysisResult {
+  report: string | null;
+  usedAgents: RequirementAgentName[];
+  retrievedDocuments: DocumentSearchResult[];
 }
 
-function createReportPath(sessionId: string): string {
-  const reportId = /^[A-Za-z0-9_-]+$/.test(sessionId)
-    ? sessionId
-    : createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
+function contentToText(content: MessageContent): string {
+  if (typeof content === "string") {
+    return content;
+  }
 
-  return `reports/${reportId}-analysis.md`;
+  return content
+    .map((block) =>
+      "text" in block && typeof block.text === "string" ? block.text : "",
+    )
+    .join("");
 }
 
+function formatRetrievedContext(documents: DocumentSearchResult[]): string {
+  if (documents.length === 0) {
+    return "当前用户知识库没有检索到相关文档。";
+  }
+
+  return documents
+    .map(
+      (document, index) =>
+        `[检索文档 ${index + 1}，相关度 ${document.score.toFixed(4)}]\n${document.content}`,
+    )
+    .join("\n\n");
+}
+
+function analysisConclusion(orchestration: OrchestrationResult): string {
+  if (orchestration.report) {
+    return orchestration.report;
+  }
+  if (orchestration.clarificationQuestions.length > 0) {
+    return [
+      "需要进一步澄清以下问题：",
+      ...orchestration.clarificationQuestions.map((question) =>
+        `- ${question}`,
+      ),
+    ].join("\n");
+  }
+
+  return "需求分析未能完成，任务已转入人工审核。";
+}
+
+/**
+ * 统一串联 PostgreSQL 会话记忆、用户文档检索和 Multi-Agent 需求分析。
+ */
 @Injectable()
 export class AdvancedAnalysisService {
   constructor(
     private readonly orchestratorService: OrchestratorService,
-    private readonly memoryService: RunnableMemoryService,
-    private readonly filesystemService: FilesystemService,
+    private readonly messageService: MessageService,
+    private readonly searchService: SearchService,
   ) {}
 
+  /**
+   * 使用已有历史与当前用户知识库增强本轮输入，执行分析后将问答写回消息表。
+   */
   async analyze(
-    sessionId: string,
+    userId: string,
+    conversationId: string,
     input: string,
   ): Promise<AdvancedAnalysisResult> {
-    const history = await this.memoryService.getHistory(sessionId);
-    const analysisInput =
-      history.length === 0
-        ? input
-        : [
-            "以下是同一需求会话的已确认上下文：",
-            ...history.map(
-              (message) => `${message.role === "human" ? "用户" : "助手"}：${message.content}`,
-            ),
-            `用户当前请求：${input}`,
-          ].join("\n");
+    const chatHistory = new DbChatHistory(
+      conversationId,
+      this.messageService,
+    );
+    const history = await chatHistory.getMessages();
+    const retrievedDocuments = await this.searchService.similaritySearch(
+      input,
+      userId,
+      3,
+    );
+    const historyContext = history
+      .map((message) => {
+        const role = message.getType() === "human" ? "用户" : "助手";
+        return `${role}：${contentToText(message.content)}`;
+      })
+      .join("\n");
+    const analysisInput = [
+      historyContext ? `会话历史：\n${historyContext}` : "",
+      `当前用户输入：\n${input}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const retrievedContext = formatRetrievedContext(retrievedDocuments);
     const orchestration = await this.orchestratorService.orchestrate(
       analysisInput,
+      retrievedContext,
     );
+    const conclusion = analysisConclusion(orchestration);
 
-    if (orchestration.status === "clarification_required") {
-      return {
-        ...orchestration,
-        sessionId,
-        reportPath: null,
-      };
-    }
-
-    if (orchestration.status !== "completed" || !orchestration.report) {
-      return {
-        ...orchestration,
-        sessionId,
-        reportPath: null,
-      };
-    }
-
-    const reportPath = createReportPath(sessionId);
-    await this.filesystemService.writeFile(reportPath, orchestration.report);
-    // 直接写入本轮问答，避免 Memory 服务为了保存结论再次调用模型。
-    await this.memoryService.appendMessage(
-      sessionId,
-      input,
-      orchestration.report,
-    );
+    // 使用 DbChatHistory 顺序写入，保持 Runnable Memory 与普通会话接口共享数据源。
+    await chatHistory.addMessages([
+      new HumanMessage(input),
+      new AIMessage(conclusion),
+    ]);
 
     return {
-      ...orchestration,
-      sessionId,
-      reportPath,
+      report: orchestration.report,
+      usedAgents: orchestration.usedAgents,
+      retrievedDocuments,
     };
   }
 }

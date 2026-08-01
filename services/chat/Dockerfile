@@ -15,7 +15,7 @@ COPY turbo.json tsconfig.base.json ./
 COPY services/chat services/chat
 COPY packages/contracts packages/contracts
 
-RUN bun run build --filter=@autix/chat
+RUN bun run build --filter=@cloudsage/chat
 
 FROM oven/bun:1.3.12 AS runner
 

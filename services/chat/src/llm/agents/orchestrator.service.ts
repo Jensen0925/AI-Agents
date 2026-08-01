@@ -88,16 +88,27 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown agent failure";
 }
 
+/**
+ * 按固定顺序协调五个需求分析 Agent，并记录每一步的输入输出状态。
+ * 澄清阶段可提前终止；任一核心分析失败时统一降级为人工审核。
+ */
 @Injectable()
 export class OrchestratorService {
-  async orchestrate(input: string): Promise<OrchestrationResult> {
+  /** 执行“抽取 → 澄清 → 并行分析/风控 → 汇总”的固定工作流。 */
+  async orchestrate(
+    input: string,
+    retrievedContext = "当前用户知识库没有检索到相关文档。",
+  ): Promise<OrchestrationResult> {
     const usedAgents: RequirementAgentName[] = [];
     const steps: OrchestrationStep[] = [];
     let activeAgent: RequirementAgentName = "extractAgent";
 
     try {
       usedAgents.push("extractAgent");
-      const extractedOutput = await extractAgent.invoke({ input });
+      const extractedOutput = await extractAgent.invoke({
+        input,
+        retrievedContext,
+      });
       const extracted = parseObject(extractedOutput);
       const extractedJson = JSON.stringify(extracted, null, 2);
       steps.push({
@@ -111,6 +122,7 @@ export class OrchestratorService {
       const clarifyOutput = await clarifyAgent.invoke({
         input,
         extracted: extractedJson,
+        retrievedContext,
       });
       const clarification = parseClarification(clarifyOutput);
       steps.push({
@@ -132,9 +144,18 @@ export class OrchestratorService {
       }
 
       usedAgents.push("analysisAgent", "riskAgent");
+      // 分析与风控只依赖抽取结果，可并行执行以降低整体响应时间。
       const [analysisResult, riskResult] = await Promise.allSettled([
-        analysisAgent.invoke({ input, extracted: extractedJson }),
-        riskAgent.invoke({ input, extracted: extractedJson }),
+        analysisAgent.invoke({
+          input,
+          extracted: extractedJson,
+          retrievedContext,
+        }),
+        riskAgent.invoke({
+          input,
+          extracted: extractedJson,
+          retrievedContext,
+        }),
       ]);
 
       if (analysisResult.status === "fulfilled") {
@@ -187,6 +208,7 @@ export class OrchestratorService {
         extracted: extractedJson,
         analysis: analysisResult.value,
         risks: riskResult.value,
+        retrievedContext,
       });
       steps.push({
         agent: "summaryAgent",
@@ -204,6 +226,7 @@ export class OrchestratorService {
         report,
       };
     } catch (error) {
+      // 捕获解析、模型和汇总异常，保持编排接口返回结构稳定。
       if (!steps.some((step) => step.agent === activeAgent)) {
         steps.push({
           agent: activeAgent,

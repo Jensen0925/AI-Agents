@@ -81,15 +81,21 @@ function toolOutputToText(output: unknown): string {
   }
 }
 
+/**
+ * 为需求分析模型提供受 workspace 沙箱约束的业务文件工具闭环。
+ * 模型只负责选择工具，实际路径校验和读写由 business.tools 统一执行。
+ */
 @Injectable()
 export class FilesystemService {
   private model?: ChatOpenAI;
 
+  /** 首次模型调用时再创建实例，避免纯文件写入路径依赖模型配置。 */
   private getModel(): ChatOpenAI {
     this.model ??= createChatModel();
     return this.model;
   }
 
+  /** 不经过模型，直接调用受沙箱保护的 write_file 工具保存制品。 */
   async writeFile(relativePath: string, content: string): Promise<void> {
     await executeBusinessTool("write_file", {
       path: relativePath,
@@ -97,6 +103,10 @@ export class FilesystemService {
     });
   }
 
+  /**
+   * 执行模型与文件工具的多轮闭环，直到模型不再请求工具或达到轮次上限。
+   * 每次工具执行结果都会以 ToolMessage 回传模型，并保留审计摘要。
+   */
   async chat(input: string): Promise<FilesystemChatResult> {
     const modelWithTools = this.getModel().bindTools(businessTools);
     const messages: BaseMessage[] = [
@@ -122,6 +132,7 @@ export class FilesystemService {
         };
       }
 
+      // 同一轮可能包含多个工具调用，逐个执行并保持 tool_call_id 对应关系。
       for (const [index, toolCall] of toolCalls.entries()) {
         const toolCallId = toolCall.id ?? `file-tool-${round}-${index}`;
         let output: string;

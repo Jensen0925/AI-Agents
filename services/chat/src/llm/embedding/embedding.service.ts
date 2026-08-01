@@ -15,11 +15,16 @@ const remoteHost =
   "https://hf-mirror.com/";
 env.remoteHost = remoteHost.endsWith("/") ? remoteHost : `${remoteHost}/`;
 
+/**
+ * 基于本地 Transformers 模型实现 LangChain Embeddings 抽象。
+ * 查询和文档使用相同的归一化向量空间，可直接用于相似度检索。
+ */
 @Injectable()
 export class EmbeddingService extends Embeddings {
   private extractor?: FeatureExtractionPipeline;
   private extractorPromise?: Promise<FeatureExtractionPipeline>;
 
+  /** 懒加载并复用特征提取管线，并发初始化时共享同一个 Promise。 */
   private async getExtractor(): Promise<FeatureExtractionPipeline> {
     if (this.extractor) {
       return this.extractor;
@@ -40,6 +45,7 @@ export class EmbeddingService extends Embeddings {
     }
   }
 
+  /** 对单条文本执行 mean pooling 和 L2 归一化，返回普通数字数组。 */
   private async embedOne(text: string): Promise<number[]> {
     const extractor = await this.getExtractor();
     const tensor = await extractor(text, {
@@ -56,10 +62,12 @@ export class EmbeddingService extends Embeddings {
     return vector.map((value) => Number(value));
   }
 
+  /** 生成单条查询文本的向量。 */
   async embedQuery(text: string): Promise<number[]> {
     return this.embedOne(text);
   }
 
+  /** 批量生成文档向量，结果顺序与输入文档顺序一致。 */
   async embedDocuments(documents: string[]): Promise<number[][]> {
     return Promise.all(documents.map((document) => this.embedOne(document)));
   }

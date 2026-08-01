@@ -1,0 +1,73 @@
+import { describe, expect, it, mock } from "bun:test";
+import { GUARDS_METADATA, PATH_METADATA } from "@nestjs/common/constants";
+import type { EmbeddingService } from "../src/llm/embedding/embedding.service";
+import { JwtAuthGuard } from "../src/auth/jwt-auth.guard";
+import {
+  DOCUMENT_EMBEDDING_DIMENSION,
+  DocumentEmbeddingService,
+} from "../src/document/embedding.service";
+import { SearchController } from "../src/document/search.controller";
+import { SearchService } from "../src/document/search.service";
+import type { PrismaService } from "../src/prisma/prisma.service";
+
+describe("DocumentEmbeddingService", () => {
+  it("normalizes the 384-dimensional vectors returned by the shared model", async () => {
+    const vector = Array.from({ length: DOCUMENT_EMBEDDING_DIMENSION }, () => 0);
+    vector[0] = 3;
+    vector[1] = 4;
+    const embedDocuments = mock(async () => [vector]);
+    const service = new DocumentEmbeddingService({
+      embedDocuments,
+    } as unknown as EmbeddingService);
+
+    const [result] = await service.embedTexts(["需求文本"]);
+
+    expect(embedDocuments).toHaveBeenCalledWith(["需求文本"]);
+    expect(result).toHaveLength(DOCUMENT_EMBEDDING_DIMENSION);
+    expect(result?.[0]).toBeCloseTo(0.6);
+    expect(result?.[1]).toBeCloseTo(0.8);
+    expect(
+      Math.sqrt(result.reduce((sum, value) => sum + value * value, 0)),
+    ).toBeCloseTo(1);
+  });
+});
+
+describe("SearchService", () => {
+  it("uses pgvector cosine distance and filters by userId", async () => {
+    const queryRaw = mock(async () => [
+      { content: "仅属于 user-1 的内容", score: "0.875" },
+    ]);
+    const embedTexts = mock(async () => [
+      Array.from({ length: DOCUMENT_EMBEDDING_DIMENSION }, () => 0.1),
+    ]);
+    const prisma = { $queryRaw: queryRaw } as unknown as PrismaService;
+    const service = new SearchService(
+      prisma,
+      { embedTexts } as unknown as DocumentEmbeddingService,
+    );
+
+    await expect(service.similaritySearch("蓝牙耳机", "user-1", 3)).resolves.toEqual([
+      { content: "仅属于 user-1 的内容", score: 0.875 },
+    ]);
+
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+    const call = queryRaw.mock.calls[0] as unknown[];
+    expect(String(call[0])).toContain("<=>");
+    expect(String(call[0])).toContain('"documents"');
+    expect(call).toContain("user-1");
+    expect(call).toContain(3);
+  });
+});
+
+describe("SearchController", () => {
+  it("is mounted at api/search and protected by JwtAuthGuard", () => {
+    expect(Reflect.getMetadata(PATH_METADATA, SearchController)).toBe(
+      "api/search",
+    );
+    const guards = Reflect.getMetadata(
+      GUARDS_METADATA,
+      SearchController,
+    ) as unknown[];
+    expect(guards).toContain(JwtAuthGuard);
+  });
+});

@@ -10,7 +10,7 @@ const nextConfig: NextConfig = {
   },
   output: "standalone",
   outputFileTracingRoot: path.join(process.cwd(), "../.."),
-  transpilePackages: ["@autix/contracts"],
+  transpilePackages: ["@cloudsage/contracts"],
   async rewrites() {
     return [
       {

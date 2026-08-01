@@ -1,6 +1,6 @@
 "use client";
 
-import { APP_NAME, type RequirementResult } from "@autix/contracts";
+import { APP_NAME, type RequirementResult } from "@cloudsage/contracts";
 import { Braces, LoaderCircle, Send, TriangleAlert } from "lucide-react";
 import { type FormEvent, useState } from "react";
 

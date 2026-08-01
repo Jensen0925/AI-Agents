@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { MessageRole } from "@prisma/client";
+import type { SearchService } from "../src/document/search.service";
 import type { OrchestratorService as OrchestratorServiceType } from "../src/llm/agents/orchestrator.service";
-import type { FilesystemService } from "../src/llm/filesystem/filesystem.service";
-import type { RunnableMemoryService } from "../src/llm/memory/runnable-memory.service";
+import type { MessageService } from "../src/message/message.service";
 
 const extractInvoke = mock(async () =>
   JSON.stringify({
@@ -121,64 +123,95 @@ describe("AdvancedAnalysisService", () => {
     report: "完整需求分析报告",
   };
 
-  it("analyzes conversation history, writes the report and appends the result", async () => {
-    const orchestrate = mock(async (_input: string) => completedResult);
-    const getHistory = mock(async () => [
-      { role: "human", content: "需求单号是 REQ-2026-001" },
-      { role: "ai", content: "已记录需求单号" },
+  it("combines DB history and retrieved context, then persists the conclusion", async () => {
+    const orchestrate = mock(
+      async (_input: string, _retrievedContext: string) => completedResult,
+    );
+    const getHistoryAsLangChainMessages = mock(async () => [
+      new HumanMessage("需求单号是 REQ-2026-001"),
+      new AIMessage("已记录需求单号"),
     ]);
-    const appendMessage = mock(async () => undefined);
-    const writeFile = mock(async () => undefined);
+    const addMessage = mock(
+      async (
+        _conversationId: string,
+        _role: MessageRole,
+        _content: string,
+        _metadata?: unknown,
+      ) => undefined,
+    );
+    const similaritySearch = mock(async () => [
+      { content: "需求必须支持上下文裁剪", score: 0.82 },
+    ]);
     const service = new AdvancedAnalysisService(
       { orchestrate } as unknown as OrchestratorServiceType,
-      { getHistory, appendMessage } as unknown as RunnableMemoryService,
-      { writeFile } as unknown as FilesystemService,
+      {
+        getHistoryAsLangChainMessages,
+        addMessage,
+      } as unknown as MessageService,
+      { similaritySearch } as unknown as SearchService,
     );
     const input = "帮我判断这个需求是否完整，并产出一份需求分析报告";
 
-    const result = await service.analyze("s1", input);
+    const result = await service.analyze("user-1", "conversation-1", input);
 
     expect(orchestrate).toHaveBeenCalledTimes(1);
     expect(orchestrate.mock.calls[0]?.[0]).toContain("REQ-2026-001");
     expect(orchestrate.mock.calls[0]?.[0]).toContain(input);
-    expect(writeFile).toHaveBeenCalledWith(
-      "reports/s1-analysis.md",
-      completedResult.report,
-    );
-    expect(appendMessage).toHaveBeenCalledWith(
-      "s1",
-      input,
-      completedResult.report,
-    );
-    expect(result.reportPath).toBe("reports/s1-analysis.md");
-    expect(result.report).toBe(completedResult.report);
+    expect(orchestrate.mock.calls[0]?.[1]).toContain("需求必须支持上下文裁剪");
+    expect(similaritySearch).toHaveBeenCalledWith(input, "user-1", 3);
+    expect(addMessage.mock.calls.map((call) => call.slice(0, 3))).toEqual([
+      ["conversation-1", MessageRole.USER, input],
+      [
+        "conversation-1",
+        MessageRole.ASSISTANT,
+        completedResult.report,
+      ],
+    ]);
+    expect(result).toEqual({
+      report: completedResult.report,
+      usedAgents: completedResult.usedAgents,
+      retrievedDocuments: [
+        { content: "需求必须支持上下文裁剪", score: 0.82 },
+      ],
+    });
   });
 
-  it("returns clarification questions without writing a report", async () => {
-    const orchestrate = mock(async (_input: string) => ({
+  it("persists clarification questions as the assistant conclusion", async () => {
+    const orchestrate = mock(async () => ({
       ...completedResult,
       status: "clarification_required" as const,
       clarificationQuestions: ["请明确系统支持的最大上下文长度"],
       usedAgents: ["extractAgent" as const, "clarifyAgent" as const],
       report: null,
     }));
-    const getHistory = mock(async () => []);
-    const appendMessage = mock(async () => undefined);
-    const writeFile = mock(async () => undefined);
+    const getHistoryAsLangChainMessages = mock(async () => []);
+    const addMessage = mock(
+      async (
+        _conversationId: string,
+        _role: MessageRole,
+        _content: string,
+        _metadata?: unknown,
+      ) => undefined,
+    );
+    const similaritySearch = mock(async () => []);
     const service = new AdvancedAnalysisService(
       { orchestrate } as unknown as OrchestratorServiceType,
-      { getHistory, appendMessage } as unknown as RunnableMemoryService,
-      { writeFile } as unknown as FilesystemService,
+      {
+        getHistoryAsLangChainMessages,
+        addMessage,
+      } as unknown as MessageService,
+      { similaritySearch } as unknown as SearchService,
+    );
+    const result = await service.analyze(
+      "user-1",
+      "conversation-1",
+      "分析这个需求",
     );
 
-    const result = await service.analyze("s1", "分析这个需求");
-
-    expect(result.status).toBe("clarification_required");
-    expect(result.clarificationQuestions).toEqual([
+    expect(result.report).toBeNull();
+    expect(addMessage).toHaveBeenCalledTimes(2);
+    expect(addMessage.mock.calls[1]?.[2]).toContain(
       "请明确系统支持的最大上下文长度",
-    ]);
-    expect(result.reportPath).toBeNull();
-    expect(writeFile).not.toHaveBeenCalled();
-    expect(appendMessage).not.toHaveBeenCalled();
+    );
   });
 });

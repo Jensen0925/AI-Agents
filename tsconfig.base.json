@@ -12,7 +12,7 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@autix/contracts": ["packages/contracts/src/index.ts"]
+      "@cloudsage/contracts": ["packages/contracts/src/index.ts"]
     }
   }
 }

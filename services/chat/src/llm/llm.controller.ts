@@ -1,4 +1,4 @@
-import type { RequirementResult } from "@autix/contracts";
+import type { RequirementResult } from "@cloudsage/contracts";
 import { Controller, Logger, Post, Res } from "@nestjs/common";
 import {
   LANGCHAIN_USER_INPUT,

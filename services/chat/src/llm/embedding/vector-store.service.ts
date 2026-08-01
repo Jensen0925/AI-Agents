@@ -15,6 +15,10 @@ export interface VectorSearchResult {
   metadata: Record<string, unknown>;
 }
 
+/**
+ * 封装进程内 MemoryVectorStore，用于最小化验证向量写入和相似度检索。
+ * 数据不会跨进程持久化，服务重启后会重新初始化。
+ */
 @Injectable()
 export class VectorStoreService {
   private vectorStore?: MemoryVectorStore;
@@ -22,6 +26,7 @@ export class VectorStoreService {
 
   constructor(private readonly embeddingService: EmbeddingService) {}
 
+  /** 首次访问时创建向量库并且只灌入一次内置需求规范片段。 */
   private async getVectorStore(): Promise<MemoryVectorStore> {
     if (!this.vectorStore) {
       this.vectorStore = new MemoryVectorStore(this.embeddingService);
@@ -43,6 +48,7 @@ export class VectorStoreService {
     return this.vectorStore;
   }
 
+  /** 将文本作为 API 来源文档写入内存向量库，并返回新增数量。 */
   async addTexts(texts: string[]): Promise<number> {
     const vectorStore = await this.getVectorStore();
     const documents = texts.map(
@@ -52,6 +58,7 @@ export class VectorStoreService {
     return documents.length;
   }
 
+  /** 按查询向量返回前 k 个相似文档、分数及元数据。 */
   async search(query: string, k: number): Promise<VectorSearchResult[]> {
     const vectorStore = await this.getVectorStore();
     const results = await vectorStore.similaritySearchWithScore(query, k);

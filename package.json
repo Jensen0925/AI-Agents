@@ -1,5 +1,5 @@
 {
-  "name": "autix",
+  "name": "cloudsage",
   "private": true,
   "workspaces": [
     "clients/*",
@@ -8,8 +8,8 @@
   ],
   "scripts": {
     "dev": "turbo dev",
-    "dev:chat-web": "turbo dev --filter=@autix/chat-web",
-    "dev:chat": "turbo dev --filter=@autix/chat",
+    "dev:chat-web": "turbo dev --filter=@cloudsage/chat-web",
+    "dev:chat": "turbo dev --filter=@cloudsage/chat",
     "build": "turbo build",
     "typecheck": "turbo typecheck"
   },

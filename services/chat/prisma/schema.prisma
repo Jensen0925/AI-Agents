@@ -1,0 +1,91 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector]
+}
+
+model Conversation {
+  id        String    @id @default(uuid())
+  userId    String
+  title     String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+
+  @@index([userId, updatedAt])
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  role           MessageRole
+  content        String       @db.Text
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model Document {
+  id          String          @id @default(uuid())
+  userId      String
+  filename    String
+  mimeType    String
+  size        Int
+  filePath    String?
+  storageType String          @default("local")
+  status      String          @default("pending")
+  chunkCount  Int             @default(0)
+  createdAt   DateTime        @default(now())
+  chunks      DocumentChunk[]
+
+  @@index([userId, createdAt])
+  @@map("documents")
+}
+
+model DocumentChunk {
+  id         String                @id @default(uuid())
+  documentId String
+  content    String                @db.Text
+  chunkIndex Int
+  embedding  Unsupported("vector")
+  document   Document              @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, chunkIndex])
+  @@map("document_chunks")
+}
+
+model TaskEvent {
+  id        String     @id @default(uuid())
+  userId    String
+  taskType  String
+  taskId    String
+  status    TaskStatus
+  message   String?
+  metadata  Json?
+  createdAt DateTime   @default(now())
+  readAt    DateTime?
+
+  @@index([userId, createdAt])
+  @@index([taskId, status])
+  @@map("task_events")
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+enum TaskStatus {
+  pending
+  processing
+  done
+  error
+}
