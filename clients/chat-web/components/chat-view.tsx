@@ -96,6 +96,9 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null)
   const handledNewSignalRef = useRef(0)
   const newConversationModeRef = useRef(false)
+  // 每次切换/新建会话都会递增。旧会话的异步请求完成后必须先校验代次，
+  // 避免把旧历史或旧模型响应写进当前会话的 UI。
+  const conversationEpochRef = useRef(0)
 
   const hasMessages = messages.length > 0
 
@@ -106,10 +109,12 @@ export function ChatView({
     ) {
       handledNewSignalRef.current = newConversationSignal
       newConversationModeRef.current = true
+      conversationEpochRef.current += 1
       setConversation(null)
       setMessages([])
       setInput("")
       setError("")
+      setThinking(false)
       setLoading(false)
       onActiveConversationChange?.(null)
     }
@@ -118,15 +123,21 @@ export function ChatView({
   useEffect(() => {
     // React Strict Mode 会在开发环境重复执行 effect；新建对话模式必须在两次执行间保持。
     if (newConversationModeRef.current && !conversationId) {
+      setConversation(null)
+      setMessages([])
+      setThinking(false)
       setLoading(false)
       return
     }
     newConversationModeRef.current = false
 
+    const epoch = ++conversationEpochRef.current
+
     if (isDemoSession()) {
       // 访客模式没有后端写权限，但仍保留一个本地示例会话，让聊天区域和聊天记录入口可见。
       setConversation(DEMO_CONVERSATION)
       setMessages([])
+      setThinking(false)
       setLoading(false)
       onConversationsChange?.([DEMO_CONVERSATION])
       onActiveConversationChange?.(DEMO_CONVERSATION.id)
@@ -134,14 +145,20 @@ export function ChatView({
     }
 
     let cancelled = false
+    const isCurrent = () => !cancelled && conversationEpochRef.current === epoch
+
     async function loadConversation() {
+      // 先清空上一会话的本地状态，避免切换期间短暂显示旧消息。
+      setConversation(null)
+      setMessages([])
+      setThinking(false)
       setLoading(true)
       setError("")
       try {
         const { data: rawConversations } = await api.get<unknown>("/conversations", {
           timeout: 10_000,
         })
-        if (cancelled) return
+        if (!isCurrent()) return
 
         const conversations = responseArray<Conversation>(rawConversations)
         // 首次进入聊天且数据库没有会话时，自动创建一个空白会话，保证输入框可以直接使用。
@@ -157,22 +174,24 @@ export function ChatView({
             { title: "新会话" },
             { timeout: 10_000 },
           )
-          if (cancelled) return
+          if (!isCurrent()) return
           active = created.data
           conversations.unshift(active)
         }
 
+        if (!isCurrent()) return
         setConversation(active)
         onConversationsChange?.(conversations)
         onActiveConversationChange?.(active.id)
         const history = await api.get<unknown>(`/conversations/${active.id}/messages`, {
           timeout: 10_000,
         })
-        if (!cancelled) setMessages(responseArray<ApiMessage>(history.data).map(toChatMessage))
+        if (!isCurrent()) return
+        setMessages(responseArray<ApiMessage>(history.data).map(toChatMessage))
       } catch (reason) {
-        if (!cancelled) setError(apiErrorMessage(reason))
+        if (isCurrent()) setError(apiErrorMessage(reason))
       } finally {
-        if (!cancelled) setLoading(false)
+        if (isCurrent()) setLoading(false)
       }
     }
 
@@ -181,7 +200,7 @@ export function ChatView({
     return () => {
       cancelled = true
     }
-  }, [conversationId, onActiveConversationChange, onConversationsChange])
+  }, [conversationId, newConversationSignal, onActiveConversationChange, onConversationsChange])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })
@@ -213,6 +232,7 @@ export function ChatView({
     if (!content || thinking) return
     const activeConversation = await ensureConversation()
     if (!activeConversation) return
+    const epoch = conversationEpochRef.current
     const userMessage: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
@@ -229,6 +249,9 @@ export function ChatView({
         // 多 Agent 分析可能需要多次模型调用，不能沿用初始化接口的短超时。
         { timeout: 120_000 },
       )
+      // 如果用户在模型调用期间切换了会话，丢弃旧会话的响应，
+      // 让它只保存在后端原会话中，不得污染当前页面。
+      if (conversationEpochRef.current !== epoch) return
       setMessages((current) => [
         ...current,
         {
@@ -251,9 +274,9 @@ export function ChatView({
         return [updated, ...current.filter((item) => item.id !== updated.id)]
       })
     } catch (reason) {
-      setError(apiErrorMessage(reason))
+      if (conversationEpochRef.current === epoch) setError(apiErrorMessage(reason))
     } finally {
-      setThinking(false)
+      if (conversationEpochRef.current === epoch) setThinking(false)
     }
   }
 
