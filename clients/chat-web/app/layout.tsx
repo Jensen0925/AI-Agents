@@ -9,7 +9,14 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="zh-CN">
+    <html lang="zh-CN" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{var theme=localStorage.getItem("cloudsage.theme");var resolved=theme==="light"?"light":"dark";document.documentElement.dataset.cloudsageTheme=resolved;document.documentElement.classList.toggle("dark",resolved==="dark")}catch{document.documentElement.dataset.cloudsageTheme="dark";document.documentElement.classList.add("dark")}`,
+          }}
+        />
+      </head>
       <body>{children}</body>
     </html>
   );

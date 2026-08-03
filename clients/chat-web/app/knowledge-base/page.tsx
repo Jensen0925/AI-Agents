@@ -1,5 +1,5 @@
-import { ChatPage } from "@/components/ai-ui/chat-page";
+import { CloudSageApp } from "@/components/cloudsage-app";
 
 export default function KnowledgeBasePage() {
-  return <ChatPage />;
+  return <CloudSageApp initialView="documents" />;
 }
