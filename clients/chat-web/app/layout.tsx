@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "llm | 需求结构化抽取",
-  description: "需求结构化抽取工作台",
+  title: "CloudSage AI 需求分析助理",
+  description: "CloudSage AI 需求分析工作区",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

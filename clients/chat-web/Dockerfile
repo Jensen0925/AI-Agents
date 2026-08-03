@@ -11,7 +11,7 @@ RUN bun install --frozen-lockfile
 
 FROM dependencies AS builder
 
-ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:4001
+ARG NEXT_PUBLIC_API_BASE_URL=http://api:3001
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
 COPY turbo.json tsconfig.base.json ./

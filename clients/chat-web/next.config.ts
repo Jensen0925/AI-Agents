@@ -2,7 +2,7 @@ import path from "node:path";
 import type { NextConfig } from "next";
 
 const apiBaseUrl =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4001";
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
 
 const nextConfig: NextConfig = {
   env: {
@@ -15,7 +15,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination: `${apiBaseUrl}/:path*`,
+        destination: `${apiBaseUrl}/api/:path*`,
       },
     ];
   },
