@@ -1,20 +1,28 @@
 services:
-  chat:
+  api:
     working_dir: /workspace
     command:
       - sh
       - -c
-      - bun install --frozen-lockfile && bun run dev:chat
+      - bun install --frozen-lockfile && bun run --cwd services/chat db:deploy && bun run --cwd services/chat db:seed && bun run dev:chat
     environment:
       NODE_ENV: development
-      PORT: 4001
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cloudsage
+      JWT_SECRET: cloudsage-local-access-secret-change-me
+      CORS_ORIGINS: http://localhost:3002,http://localhost:3003
+      PORT: 3001
+      ADMIN_EMAIL: admin@cloudsage.local
+      ADMIN_PASSWORD: Cloudsage@123
     volumes:
       - ../..:/workspace
       - chat_root_node_modules:/workspace/node_modules
       - chat_workspace_node_modules:/workspace/services/chat/node_modules
       - chat_contracts_node_modules:/workspace/packages/contracts/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
 
-  chat-web:
+  web:
     working_dir: /workspace
     command:
       - sh
@@ -22,13 +30,37 @@ services:
       - bun install --frozen-lockfile && bun run dev:chat-web
     environment:
       NODE_ENV: development
-      NEXT_PUBLIC_API_BASE_URL: http://chat:4001
+      NEXT_PUBLIC_API_BASE_URL: http://api:3001
       PORT: 3002
     volumes:
       - ../..:/workspace
       - web_root_node_modules:/workspace/node_modules
       - web_workspace_node_modules:/workspace/clients/chat-web/node_modules
       - web_contracts_node_modules:/workspace/packages/contracts/node_modules
+    depends_on:
+      api:
+        condition: service_started
+
+  admin-web:
+    working_dir: /workspace
+    command:
+      - sh
+      - -c
+      - bun install --frozen-lockfile && bun run dev:admin-web
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_BASE_URL: http://api:3001
+      PORT: 3003
+    ports:
+      - "3003:3003"
+    volumes:
+      - ../..:/workspace
+      - admin_root_node_modules:/workspace/node_modules
+      - admin_workspace_node_modules:/workspace/clients/admin-web/node_modules
+      - admin_contracts_node_modules:/workspace/packages/contracts/node_modules
+    depends_on:
+      api:
+        condition: service_started
 
 volumes:
   chat_root_node_modules:
@@ -37,3 +69,6 @@ volumes:
   web_root_node_modules:
   web_workspace_node_modules:
   web_contracts_node_modules:
+  admin_root_node_modules:
+  admin_workspace_node_modules:
+  admin_contracts_node_modules:

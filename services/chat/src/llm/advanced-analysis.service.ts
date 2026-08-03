@@ -18,6 +18,7 @@ import {
 
 export interface AdvancedAnalysisResult {
   report: string | null;
+  clarificationQuestions?: string[];
   usedAgents: RequirementAgentName[];
   retrievedDocuments: DocumentSearchResult[];
 }
@@ -119,6 +120,7 @@ export class AdvancedAnalysisService {
 
     return {
       report: orchestration.report,
+      clarificationQuestions: orchestration.clarificationQuestions,
       usedAgents: orchestration.usedAgents,
       retrievedDocuments,
     };

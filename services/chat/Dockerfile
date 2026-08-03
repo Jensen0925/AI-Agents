@@ -22,10 +22,10 @@ FROM oven/bun:1.3.12 AS runner
 WORKDIR /workspace/services/chat
 
 ENV NODE_ENV=production
-ENV PORT=4001
+ENV PORT=3001
 
 COPY --from=builder /workspace /workspace
 
-EXPOSE 4001
+EXPOSE 3001
 
-CMD ["bun", "dist/main.js"]
+CMD ["sh", "-c", "bun run db:deploy && bun run db:seed && bun dist/main.js"]
