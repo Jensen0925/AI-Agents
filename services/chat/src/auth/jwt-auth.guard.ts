@@ -1,25 +1,19 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   CanActivate,
   ExecutionContext,
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
-
-interface JwtHeader {
-  alg?: string;
-  typ?: string;
-}
-
-interface JwtPayload {
-  sub?: string;
-  userId?: string;
-  exp?: number;
-  nbf?: number;
-}
+import { UserStatus } from "@prisma/client";
+import { verifyAccessToken } from "./token";
+import { PrismaService } from "../prisma/prisma.service";
 
 export interface AuthenticatedUser {
   userId: string;
+  email?: string;
+  name?: string;
+  roles?: string[];
+  permissions?: string[];
 }
 
 export interface AuthenticatedRequest {
@@ -29,98 +23,49 @@ export interface AuthenticatedRequest {
   user?: AuthenticatedUser;
 }
 
-function parseJsonPart<T>(part: string): T {
-  try {
-    return JSON.parse(Buffer.from(part, "base64url").toString("utf8")) as T;
-  } catch {
-    throw new UnauthorizedException("Invalid JWT payload");
-  }
-}
-
-function verifyToken(token: string, secret: string): JwtPayload {
-  const parts = token.split(".");
-  if (parts.length !== 3) {
-    throw new UnauthorizedException("Invalid bearer token");
-  }
-
-  const [encodedHeader, encodedPayload, encodedSignature] = parts;
-  const header = parseJsonPart<JwtHeader>(encodedHeader);
-  if (header.alg !== "HS256") {
-    throw new UnauthorizedException("Unsupported JWT algorithm");
-  }
-
-  const expected = createHmac("sha256", secret)
-    .update(`${encodedHeader}.${encodedPayload}`)
-    .digest();
-  const actual = Buffer.from(encodedSignature, "base64url");
-  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-    throw new UnauthorizedException("Invalid bearer token signature");
-  }
-
-  return parseJsonPart<JwtPayload>(encodedPayload);
-}
-/**
- *测试token生成命令：
-TOKEN=$(bun -e '
-import { createHmac } from "node:crypto";
-
-const secret = process.env.JWT_SECRET;
-if (!secret) throw new Error("JWT_SECRET is missing");
-
-const encode = (value) =>
-  Buffer.from(JSON.stringify(value)).toString("base64url");
-
-const now = Math.floor(Date.now() / 1000);
-const header = encode({ alg: "HS256", typ: "JWT" });
-const payload = encode({
-  sub: "test-user-001",
-  iat: now,
-  exp: now + 3600
-});
-const signature = createHmac("sha256", secret)
-  .update(`${header}.${payload}`)
-  .digest("base64url");
-
-console.log(`${header}.${payload}.${signature}`);
-')
-
-echo "$TOKEN"
- */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
-    const request = context
-      .switchToHttp()
-      .getRequest<AuthenticatedRequest>();
+  constructor(private readonly prisma: PrismaService) {}
+
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authorization = request.headers.authorization;
     const header = Array.isArray(authorization)
       ? authorization[0]
       : authorization;
     const token = header?.match(/^Bearer\s+(.+)$/i)?.[1];
-    if (!token) {
-      throw new UnauthorizedException("Bearer token is required");
+    if (!token) throw new UnauthorizedException("Bearer token is required");
+
+    let payload;
+    try {
+      payload = verifyAccessToken(token);
+    } catch (error) {
+      throw new UnauthorizedException(
+        error instanceof Error ? error.message : "Invalid bearer token",
+      );
     }
 
-    const secret = process.env["JWT_SECRET"];
-    if (!secret) {
-      throw new UnauthorizedException("JWT_SECRET is not configured");
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      include: {
+        roles: {
+          include: { role: { include: { permissions: { include: { permission: true } } } } },
+        },
+      },
+    });
+    if (!user || user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException("User is not active");
     }
 
-    const payload = verifyToken(token, secret);
-    const now = Math.floor(Date.now() / 1000);
-    if (typeof payload.exp === "number" && payload.exp <= now) {
-      throw new UnauthorizedException("Bearer token has expired");
-    }
-    if (typeof payload.nbf === "number" && payload.nbf > now) {
-      throw new UnauthorizedException("Bearer token is not active yet");
-    }
-
-    const userId = payload.sub ?? payload.userId;
-    if (typeof userId !== "string" || userId.trim().length === 0) {
-      throw new UnauthorizedException("JWT subject is required");
-    }
-
-    request.user = { userId: userId.trim() };
+    request.user = {
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      roles: user.roles.map(({ role }) => role.code),
+      permissions: user.roles.flatMap(({ role }) =>
+        role.permissions.map(({ permission }) => permission.code),
+      ),
+    };
     return true;
   }
 }

@@ -7,6 +7,10 @@ import { AdvancedModule } from "./llm/advanced.module";
 import { LlmModule } from "./llm/llm.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { SseModule } from "./sse/sse.module";
+import { AuthModule } from "./auth/auth.module";
+import { UsersModule } from "./users/users.module";
+import { RolesModule } from "./roles/roles.module";
+import { PermissionsModule } from "./permissions/permissions.module";
 
 @Module({
   imports: [
@@ -17,6 +21,10 @@ import { SseModule } from "./sse/sse.module";
     LlmModule,
     AdvancedModule,
     DocumentModule,
+    AuthModule,
+    UsersModule,
+    RolesModule,
+    PermissionsModule,
   ],
   controllers: [AppController],
 })
