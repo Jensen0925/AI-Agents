@@ -9,7 +9,9 @@
   "scripts": {
     "dev": "turbo dev",
     "dev:chat-web": "turbo dev --filter=@cloudsage/chat-web",
+    "dev:admin-web": "turbo dev --filter=@cloudsage/admin-web",
     "dev:chat": "turbo dev --filter=@cloudsage/chat",
+    "dev:api": "turbo dev --filter=@cloudsage/chat",
     "build": "turbo build",
     "typecheck": "turbo typecheck"
   },
