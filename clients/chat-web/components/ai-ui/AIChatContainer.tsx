@@ -51,6 +51,17 @@ interface RetrievedDocument {
   score: number;
 }
 
+interface ConversationChatResponse {
+  report: string | null;
+  intent: "analyze" | "query" | "chat";
+  summary: string;
+  clarificationQuestions: string[];
+  usedAgents: string[];
+  retrievedDocuments: RetrievedDocument[];
+  queryResponse?: string;
+  chatResponse?: string;
+}
+
 interface Message {
   id: string;
   role: "USER" | "ASSISTANT";
@@ -67,6 +78,42 @@ function uiEndpoint(path: "chat" | "action"): string {
   return configuredApiBase
     ? `${configuredApiBase}/api/ui-chat/${path}`
     : `/ui-chat/${path}`;
+}
+
+/** 需求类型选择等交互流程继续使用 UI 状态机；普通对话走会话统一入口。 */
+function shouldUseUiFlow(input: string): boolean {
+  return /我要提一个新需求|提一个新需求|查看需求\s*REQ-[A-Za-z0-9-]+|提交需求分析/.test(
+    input,
+  );
+}
+
+function conversationResponseToUi(
+  response: ConversationChatResponse,
+): AIUIResponse {
+  const clarification = response.clarificationQuestions?.length
+    ? [
+        "需要进一步澄清以下问题：",
+        ...response.clarificationQuestions.map((question) => `- ${question}`),
+      ].join("\n")
+    : "";
+  const content =
+    response.chatResponse?.trim() ||
+    response.queryResponse?.trim() ||
+    response.report?.trim() ||
+    response.summary?.trim() ||
+    clarification ||
+    "暂时没有可展示的结果。";
+
+  return {
+    message: content,
+    components: [
+      {
+        type: "text",
+        content,
+        markdown: true,
+      },
+    ],
+  };
 }
 
 const QUICK_PROMPTS = [
@@ -93,6 +140,62 @@ const DEMO_CONVERSATION: Conversation = {
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 };
+
+/** 与服务端保持一致：用首条消息生成短标题，避免会话列表全部显示“新会话”。 */
+function createConversationTitle(input: string): string {
+  const normalized = input.replace(/\s+/g, " ").trim();
+  const characters = Array.from(normalized);
+  if (characters.length <= 28) return normalized;
+  return `${characters.slice(0, 27).join("")}…`;
+}
+
+/**
+ * 将服务端历史与浏览器中的临时消息合并。
+ *
+ * 用户消息和模型响应可能会先出现在本地缓存，稍后才由服务端写入；
+ * 历史接口返回时不能直接覆盖本地列表，否则切换会话会短暂丢消息。
+ * 除了 id，还按 role + content 做出现次数匹配，兼容本地 optimistic
+ * 消息与数据库消息 id 不同的情况，并保留本地组件/引用等 UI 字段。
+ */
+function mergeMessages(serverMessages: Message[], localMessages: Message[]): Message[] {
+  const merged = serverMessages.map((message) => ({ ...message }));
+  const serverIndexById = new Map(
+    serverMessages.map((message, index) => [message.id, index]),
+  );
+  const serverIndicesByFingerprint = new Map<string, number[]>();
+  const fingerprint = (message: Message) => `${message.role}\u0000${message.content}`;
+
+  serverMessages.forEach((message, index) => {
+    const key = fingerprint(message);
+    const indices = serverIndicesByFingerprint.get(key) ?? [];
+    indices.push(index);
+    serverIndicesByFingerprint.set(key, indices);
+  });
+
+  const usedServerIndices = new Set<number>();
+  for (const localMessage of localMessages) {
+    let serverIndex = serverIndexById.get(localMessage.id);
+
+    if (serverIndex === undefined) {
+      const candidates = serverIndicesByFingerprint.get(fingerprint(localMessage)) ?? [];
+      serverIndex = candidates.find((index) => !usedServerIndices.has(index));
+    }
+
+    if (serverIndex !== undefined) {
+      usedServerIndices.add(serverIndex);
+      merged[serverIndex] = {
+        ...merged[serverIndex],
+        ...(localMessage.sources ? { sources: localMessage.sources } : {}),
+        ...(localMessage.components ? { components: localMessage.components } : {}),
+      };
+      continue;
+    }
+
+    merged.push(localMessage);
+  }
+
+  return merged;
+}
 
 function formatTime(value?: string): string {
   if (!value) return "刚刚";
@@ -248,6 +351,33 @@ function EmptyConversation({ onPrompt }: { onPrompt: (prompt: string) => void })
   );
 }
 
+/** 切换会话且历史尚未返回时的轻量骨架屏，避免页面闪成空白或显示加载文案。 */
+function ConversationSkeleton() {
+  return (
+    <div
+      className="mx-auto flex w-full max-w-[900px] flex-col gap-8 px-4 py-8 sm:px-8 sm:py-10"
+      aria-label="正在加载会话内容"
+      role="status"
+    >
+      <div className="flex justify-end">
+        <div className="w-[58%] space-y-2">
+          <div className="ml-auto h-11 w-full animate-pulse rounded-2xl rounded-br-md bg-white/[0.08]" />
+          <div className="ml-auto h-2 w-16 animate-pulse rounded bg-white/[0.06]" />
+        </div>
+      </div>
+      <div className="flex gap-3.5">
+        <div className="h-9 w-9 shrink-0 animate-pulse rounded-xl bg-blue-400/10" />
+        <div className="min-w-0 flex-1 space-y-3 pt-1">
+          <div className="h-3 w-24 animate-pulse rounded bg-white/[0.08]" />
+          <div className="h-3 w-[88%] animate-pulse rounded bg-white/[0.06]" />
+          <div className="h-3 w-[68%] animate-pulse rounded bg-white/[0.06]" />
+          <div className="h-24 w-[72%] animate-pulse rounded-xl border border-white/[0.06] bg-white/[0.035]" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function AIChatContainer() {
   const [hydrated, setHydrated] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -255,7 +385,7 @@ export function AIChatContainer() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [sending, setSending] = useState(false);
+  const [pendingRequests, setPendingRequests] = useState<Record<string, number>>({});
   const [error, setError] = useState("");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobileNoticeOpen, setMobileNoticeOpen] = useState(false);
@@ -263,6 +393,65 @@ export function AIChatContainer() {
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [noticeError, setNoticeError] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
+  const activeIdRef = useRef("");
+  const messagesRef = useRef<Message[]>([]);
+  const messageCacheRef = useRef<Record<string, Message[]>>({});
+  const pendingMessagesRef = useRef<Record<string, Message[]>>({});
+
+  const sending = Boolean(activeId && pendingRequests[activeId]);
+
+  function setVisibleMessages(nextMessages: Message[]) {
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
+  }
+
+  function getConversationMessages(conversationId: string): Message[] {
+    return mergeMessages(
+      messageCacheRef.current[conversationId] ?? [],
+      pendingMessagesRef.current[conversationId] ?? [],
+    );
+  }
+
+  function updateConversationMessages(
+    conversationId: string,
+    updater: (current: Message[]) => Message[],
+  ) {
+    const current =
+      messageCacheRef.current[conversationId] ??
+      (activeIdRef.current === conversationId ? messagesRef.current : []);
+    const next = updater(current);
+    messageCacheRef.current[conversationId] = next;
+    if (activeIdRef.current === conversationId) {
+      setVisibleMessages(next);
+    }
+  }
+
+  function changePendingRequests(conversationId: string, delta: number) {
+    setPendingRequests((current) => {
+      const nextCount = Math.max(0, (current[conversationId] ?? 0) + delta);
+      const next = { ...current };
+      if (nextCount === 0) {
+        delete next[conversationId];
+      } else {
+        next[conversationId] = nextCount;
+      }
+      return next;
+    });
+  }
+
+  function selectConversation(conversationId: string) {
+    if (activeIdRef.current) {
+      messageCacheRef.current[activeIdRef.current] = messagesRef.current;
+    }
+
+    activeIdRef.current = conversationId;
+    setActiveId(conversationId);
+    const cachedMessages = getConversationMessages(conversationId);
+    messageCacheRef.current[conversationId] = cachedMessages;
+    setVisibleMessages(cachedMessages);
+    // 没有缓存时立即进入骨架屏，避免切换瞬间闪出空状态；有缓存则直接展示内容。
+    setLoadingHistory(cachedMessages.length === 0 && hydrated && !preview);
+  }
 
   const preview = hydrated && (isDemoSession() || !getCurrentUser());
   const activeConversation = useMemo(
@@ -284,7 +473,7 @@ export function AIChatContainer() {
     async function loadConversations() {
       if (preview) {
         setConversations([DEMO_CONVERSATION]);
-        setActiveId(DEMO_CONVERSATION.id);
+        selectConversation(DEMO_CONVERSATION.id);
         setEvents(DEMO_EVENTS);
         return;
       }
@@ -293,13 +482,13 @@ export function AIChatContainer() {
         if (cancelled) return;
         if (data.length > 0) {
           setConversations(data);
-          setActiveId(data[0].id);
+          selectConversation(data[0].id);
         } else {
           const { data: created } = await api.post<Conversation>("/conversations", {
             title: "新会话",
           });
           setConversations([created]);
-          setActiveId(created.id);
+          selectConversation(created.id);
         }
         const taskResponse = await api.get<{ items: TaskEvent[] }>("/tasks/history", {
           params: { pageSize: 20 },
@@ -319,15 +508,30 @@ export function AIChatContainer() {
   useEffect(() => {
     if (!hydrated || !activeId) return;
     if (preview) {
-      setMessages([]);
+      setVisibleMessages([]);
       return;
     }
     let cancelled = false;
+    const conversationId = activeId;
+    const cachedMessages = getConversationMessages(conversationId);
+    messageCacheRef.current[conversationId] = cachedMessages;
+    if (cachedMessages.length > 0) {
+      setVisibleMessages(cachedMessages);
+    }
     setLoadingHistory(true);
     void api
-      .get<Message[]>(`/conversations/${activeId}/messages`)
+      .get<Message[]>(`/conversations/${conversationId}/messages`)
       .then(({ data }) => {
-        if (!cancelled) setMessages(data);
+        // 保留请求尚未落库的本地消息，以及 UI 状态机产生的临时组件。
+        const localMessages = getConversationMessages(conversationId);
+        const mergedMessages = mergeMessages(
+          data,
+          localMessages,
+        );
+        messageCacheRef.current[conversationId] = mergedMessages;
+        if (!cancelled && activeIdRef.current === conversationId) {
+          setVisibleMessages(mergedMessages);
+        }
       })
       .catch((reason) => {
         if (!cancelled) setError(apiErrorMessage(reason));
@@ -361,8 +565,9 @@ export function AIChatContainer() {
             })
           ).data;
       setConversations((current) => [conversation, ...current]);
-      setActiveId(conversation.id);
-      setMessages([]);
+      messageCacheRef.current[conversation.id] = [];
+      pendingMessagesRef.current[conversation.id] = [];
+      selectConversation(conversation.id);
       setMobileNavOpen(false);
       return conversation;
     } catch (reason) {
@@ -379,9 +584,16 @@ export function AIChatContainer() {
       const next = conversations.filter((item) => item.id !== id);
       setConversations(next);
       if (activeId === id) {
-        setActiveId(next[0]?.id ?? "");
-        setMessages([]);
+        if (next[0]) {
+          selectConversation(next[0].id);
+        } else {
+          activeIdRef.current = "";
+          setActiveId("");
+          setVisibleMessages([]);
+        }
       }
+      delete messageCacheRef.current[id];
+      delete pendingMessagesRef.current[id];
     } catch (reason) {
       setError(apiErrorMessage(reason));
     }
@@ -398,16 +610,29 @@ export function AIChatContainer() {
     }
 
     const now = new Date().toISOString();
-    setMessages((current) => [
+    const userMessage: Message = {
+      id: `user-${Date.now()}`,
+      role: "USER",
+      content: text,
+      createdAt: now,
+    };
+    pendingMessagesRef.current[conversationId] = [
+      ...(pendingMessagesRef.current[conversationId] ?? []),
+      userMessage,
+    ];
+    updateConversationMessages(conversationId, (current) => [
       ...current,
-      { id: `user-${Date.now()}`, role: "USER", content: text, createdAt: now },
+      userMessage,
     ]);
     setConversations((current) =>
       current.map((item) =>
         item.id === conversationId
           ? {
               ...item,
-              title: item.title === "新会话" ? text.slice(0, 24) : item.title,
+              title:
+                item.title === "新会话"
+                  ? createConversationTitle(text)
+                  : item.title,
               updatedAt: now,
             }
           : item,
@@ -415,47 +640,64 @@ export function AIChatContainer() {
     );
     setInput("");
     setError("");
-    setSending(true);
+    changePendingRequests(conversationId, 1);
     try {
-      const response = preview
+      const responseData = preview
         ? null
-        : await api.post<AIUIResponse>(uiEndpoint("chat"), {
-            sessionId: conversationId,
-            input: text,
-            history: messages.map((message) => ({
-              role: message.role === "ASSISTANT" ? "assistant" : "user",
-              content: message.content,
-            })),
-          });
-      const content = response?.data.message?.trim() || (response ? "请按下方提示继续。" : "演示模式已收到需求。使用真实账号登录后，我会结合知识库和会话历史完成完整分析。");
-      setMessages((current) => [
+        : shouldUseUiFlow(text)
+          ? (
+              await api.post<AIUIResponse>(uiEndpoint("chat"), {
+                sessionId: conversationId,
+                input: text,
+                history: messages.map((message) => ({
+                  role: message.role === "ASSISTANT" ? "assistant" : "user",
+                  content: message.content,
+                })),
+              })
+            ).data
+          : conversationResponseToUi(
+              (
+                await api.post<ConversationChatResponse>(
+                  `/conversations/${conversationId}/chat`,
+                  { input: text },
+                )
+              ).data,
+            );
+      const content =
+        responseData?.message?.trim() ||
+        (responseData
+          ? "请按下方提示继续。"
+          : "演示模式已收到需求。使用真实账号登录后，我会结合知识库和会话历史完成完整分析。");
+      updateConversationMessages(conversationId, (current) => [
         ...current,
         {
           id: `assistant-${Date.now()}`,
           role: "ASSISTANT",
           content,
           createdAt: new Date().toISOString(),
-          components: response?.data.components,
+          components: responseData?.components,
         },
       ]);
+      pendingMessagesRef.current[conversationId] = [];
     } catch (reason) {
       setError(apiErrorMessage(reason));
     } finally {
-      setSending(false);
+      changePendingRequests(conversationId, -1);
     }
   }
 
   /** 将卡片、表单和确认操作回传给 UI 状态机，并把下一步组件追加到当前会话。 */
   async function handleUIAction(action: UIAction) {
     if (!activeId || sending || preview) return;
+    const conversationId = activeId;
     setError("");
-    setSending(true);
+    changePendingRequests(conversationId, 1);
     try {
       const { data } = await api.post<AIUIResponse>(uiEndpoint("action"), {
-        sessionId: activeId,
+        sessionId: conversationId,
         action,
       });
-      setMessages((current) => [
+      updateConversationMessages(conversationId, (current) => [
         ...current,
         {
           id: `assistant-${Date.now()}`,
@@ -468,7 +710,7 @@ export function AIChatContainer() {
     } catch (reason) {
       setError(apiErrorMessage(reason));
     } finally {
-      setSending(false);
+      changePendingRequests(conversationId, -1);
     }
   }
 
@@ -507,7 +749,7 @@ export function AIChatContainer() {
       notificationUnread={events.some((item) => !item.readAt)}
       onSelectConversation={(id) => {
         setError("");
-        setActiveId(id);
+        selectConversation(id);
         setMobileNavOpen(false);
       }}
       onDeleteConversation={(id) => void deleteConversation(id)}
@@ -598,11 +840,8 @@ export function AIChatContainer() {
         <div className="flex min-h-0 flex-1">
           <section className="flex min-w-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-y-auto">
-              {loadingHistory ? (
-                <div className="flex h-full items-center justify-center text-sm text-[#777783]">
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  正在加载会话
-                </div>
+              {loadingHistory && messages.length === 0 ? (
+                <ConversationSkeleton />
               ) : messages.length === 0 ? (
                 <EmptyConversation onPrompt={(prompt) => void sendText(prompt)} />
               ) : (

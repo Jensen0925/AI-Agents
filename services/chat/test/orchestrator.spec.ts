@@ -31,6 +31,28 @@ mock.module("../src/llm/agents/sub-agents", () => ({
   summaryAgent: { invoke: summaryInvoke },
 }));
 
+const runAnalysisGraph = mock(async (_input: string, _context?: string) => ({
+  messages: [],
+  intent: "analyze" as const,
+  extracted: "需求字段",
+  clarified: JSON.stringify({ needsClarification: false, questions: [] }),
+  analysisResult: "需求分析结果",
+  riskResult: "风险评估结果",
+  summary: "完整需求分析报告",
+  steps: [
+    "classifier" as const,
+    "extractStep" as const,
+    "clarifyStep" as const,
+    "analysisStep" as const,
+    "riskStep" as const,
+    "summaryStep" as const,
+  ],
+}));
+
+mock.module("../src/llm/graph/requirement-analysis-graph", () => ({
+  runAnalysisGraph,
+}));
+
 const { OrchestratorService } = require(
   "../src/llm/agents/orchestrator.service"
 ) as typeof import("../src/llm/agents/orchestrator.service");
@@ -123,6 +145,27 @@ describe("AdvancedAnalysisService", () => {
     report: "完整需求分析报告",
   };
 
+  beforeEach(() => {
+    runAnalysisGraph.mockClear();
+    runAnalysisGraph.mockImplementation(async () => ({
+      messages: [],
+      intent: "analyze" as const,
+      extracted: "需求字段",
+      clarified: JSON.stringify({ needsClarification: false, questions: [] }),
+      analysisResult: "需求分析结果",
+      riskResult: "风险评估结果",
+      summary: "完整需求分析报告",
+      steps: [
+        "classifier" as const,
+        "extractStep" as const,
+        "clarifyStep" as const,
+        "analysisStep" as const,
+        "riskStep" as const,
+        "summaryStep" as const,
+      ],
+    }));
+  });
+
   it("combines DB history and retrieved context, then persists the conclusion", async () => {
     const orchestrate = mock(
       async (_input: string, _retrievedContext: string) => completedResult,
@@ -154,10 +197,11 @@ describe("AdvancedAnalysisService", () => {
 
     const result = await service.analyze("user-1", "conversation-1", input);
 
-    expect(orchestrate).toHaveBeenCalledTimes(1);
-    expect(orchestrate.mock.calls[0]?.[0]).toContain("REQ-2026-001");
-    expect(orchestrate.mock.calls[0]?.[0]).toContain(input);
-    expect(orchestrate.mock.calls[0]?.[1]).toContain("需求必须支持上下文裁剪");
+    expect(orchestrate).not.toHaveBeenCalled();
+    expect(runAnalysisGraph).toHaveBeenCalledTimes(1);
+    expect(runAnalysisGraph.mock.calls[0]?.[0]).toBe(input);
+    expect(runAnalysisGraph.mock.calls[0]?.[1]).toContain("REQ-2026-001");
+    expect(runAnalysisGraph.mock.calls[0]?.[1]).toContain("需求必须支持上下文裁剪");
     expect(similaritySearch).toHaveBeenCalledWith(input, "user-1", 3);
     expect(addMessage.mock.calls.map((call) => call.slice(0, 3))).toEqual([
       ["conversation-1", MessageRole.USER, input],
@@ -169,14 +213,32 @@ describe("AdvancedAnalysisService", () => {
     ]);
     expect(result).toEqual({
       report: completedResult.report,
+      status: "completed",
+      fallback: null,
+      intent: "analyze",
+      summary: completedResult.report,
+      clarificationQuestions: [],
       usedAgents: completedResult.usedAgents,
       retrievedDocuments: [
         { content: "需求必须支持上下文裁剪", score: 0.82 },
+      ],
+      queryResponse: undefined,
+      chatResponse: undefined,
+      steps: [
+        "classifier",
+        "extractStep",
+        "clarifyStep",
+        "analysisStep",
+        "riskStep",
+        "summaryStep",
       ],
     });
   });
 
   it("persists clarification questions as the assistant conclusion", async () => {
+    runAnalysisGraph.mockImplementation(async () => {
+      throw new Error("graph unavailable");
+    });
     const orchestrate = mock(async () => ({
       ...completedResult,
       status: "clarification_required" as const,
@@ -209,9 +271,53 @@ describe("AdvancedAnalysisService", () => {
     );
 
     expect(result.report).toBeNull();
+    expect(result.status).toBe("clarification_required");
+    expect(result.summary).toContain("请明确系统支持的最大上下文长度");
     expect(addMessage).toHaveBeenCalledTimes(2);
     expect(addMessage.mock.calls[1]?.[2]).toContain(
       "请明确系统支持的最大上下文长度",
     );
+  });
+
+  it("returns a displayable manual-review message when both analysis paths fail", async () => {
+    runAnalysisGraph.mockImplementation(async () => {
+      throw new Error("graph unavailable");
+    });
+    const orchestrate = mock(async () => ({
+      ...completedResult,
+      status: "failed" as const,
+      fallback: "manual_review" as const,
+      usedAgents: ["extractAgent" as const],
+      report: null,
+    }));
+    const addMessage = mock(
+      async (
+        _conversationId: string,
+        _role: MessageRole,
+        _content: string,
+        _metadata?: unknown,
+      ) => undefined,
+    );
+    const service = new AdvancedAnalysisService(
+      { orchestrate } as unknown as OrchestratorServiceType,
+      {
+        getHistoryAsLangChainMessages: mock(async () => []),
+        addMessage,
+      } as unknown as MessageService,
+      { similaritySearch: mock(async () => []) } as unknown as SearchService,
+    );
+
+    const result = await service.analyze(
+      "user-1",
+      "conversation-1",
+      "分析用户登录需求",
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result.fallback).toBe("manual_review");
+    const fallbackMessage = "需求分析未能完成，任务已转入人工审核。";
+    expect(result.report).toBe(fallbackMessage);
+    expect(result.summary).toBe(fallbackMessage);
+    expect(addMessage.mock.calls[1]?.[2]).toBe(fallbackMessage);
   });
 });

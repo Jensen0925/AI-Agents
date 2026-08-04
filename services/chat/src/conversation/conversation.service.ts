@@ -29,7 +29,12 @@ export class ConversationService {
    */
   async findByUser(userId: string) {
     const conversations = await this.prisma.conversation.findMany({
-      where: { userId },
+      // 空会话只用于客户端发送首条消息前的临时状态，不应出现在聊天记录列表中。
+      // 这样可以兼容历史版本已经创建的“新会话”空记录，避免前端启动时反复加载它。
+      where: {
+        userId,
+        messages: { some: {} },
+      },
       orderBy: { updatedAt: "desc" },
       include: {
         messages: {

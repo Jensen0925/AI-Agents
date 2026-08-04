@@ -57,6 +57,25 @@ describe("SearchService", () => {
     expect(call).toContain("user-1");
     expect(call).toContain(3);
   });
+
+  it("filters out documents below the configured relevance threshold", async () => {
+    const queryRaw = mock(async () => [
+      { content: "用户登录需求", score: "0.81" },
+      { content: "无关退换货政策", score: "0.14" },
+    ]);
+    const embedTexts = mock(async () => [
+      Array.from({ length: DOCUMENT_EMBEDDING_DIMENSION }, () => 0.1),
+    ]);
+    const prisma = { $queryRaw: queryRaw } as unknown as PrismaService;
+    const service = new SearchService(
+      prisma,
+      { embedTexts } as unknown as DocumentEmbeddingService,
+    );
+
+    await expect(service.similaritySearch("用户登录功能", "user-1", 3)).resolves.toEqual([
+      { content: "用户登录需求", score: 0.81 },
+    ]);
+  });
 });
 
 describe("SearchController", () => {

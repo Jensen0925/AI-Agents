@@ -11,12 +11,14 @@
     "db:seed": "bun prisma/seed.ts",
     "start": "bun dist/main.js",
     "test": "bun test",
+    "test:graph": "bun test-graph.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@cloudsage/contracts": "workspace:*",
     "@langchain/classic": "^1.0.40",
     "@langchain/core": "^1.2.3",
+    "@langchain/langgraph": "^1.2.9",
     "@langchain/openai": "^1.5.5",
     "@langchain/textsplitters": "^1.0.1",
     "@nestjs/common": "11.1.6",

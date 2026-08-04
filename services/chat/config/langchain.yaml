@@ -8,8 +8,9 @@ llm:
   maxConcurrency: 2
 
 retrieval:
-  enabled: false
-  topK: 4
+  enabled: true
+  topK: 3
+  minScore: 0.35
 
 tools:
   enabled: false

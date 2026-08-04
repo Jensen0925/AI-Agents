@@ -16,6 +16,7 @@ export interface LangchainConfig {
   retrieval: {
     enabled: boolean;
     topK: number;
+    minScore: number;
   };
   tools: {
     enabled: boolean;
@@ -147,6 +148,7 @@ export function loadLangchainConfig(): LangchainConfig {
     retrieval: {
       enabled: readBoolean(retrieval, "enabled"),
       topK: readNumber(retrieval, "topK"),
+      minScore: readNumber(retrieval, "minScore"),
     },
     tools: {
       enabled: readBoolean(tools, "enabled"),

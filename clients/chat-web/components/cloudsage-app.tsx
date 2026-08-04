@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { api, apiErrorMessage } from "@/lib/api"
 import {
@@ -43,6 +43,10 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   // 只有用户从侧栏点选会话时才传给 ChatView，避免 ChatView 自己创建会话后被重复加载。
   const [conversationToOpen, setConversationToOpen] = useState<string | undefined>(undefined)
+  // 删除请求是异步的，使用 ref 读取最新的会话选择，避免请求期间切换会话后
+  // 旧删除回调把新会话错误地重置成空白页。
+  const activeConversationIdRef = useRef<string | null>(null)
+  const conversationToOpenRef = useRef<string | undefined>(undefined)
 
   const demo = hydrated && isDemoSession()
   const categories = useMemo<Category[]>(() => buildCategories(documents), [documents])
@@ -156,6 +160,8 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
   }
 
   function createConversation() {
+    activeConversationIdRef.current = null
+    conversationToOpenRef.current = undefined
     setView("chat")
     setActiveConversationId(null)
     setConversationToOpen(undefined)
@@ -163,10 +169,17 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
   }
 
   function openConversation(id: string) {
+    activeConversationIdRef.current = id
+    conversationToOpenRef.current = id
     setView("chat")
     setActiveConversationId(id)
     setConversationToOpen(id)
   }
+
+  const handleActiveConversationChange = useCallback((id: string | null) => {
+    activeConversationIdRef.current = id
+    setActiveConversationId(id)
+  }, [])
 
   async function deleteConversation(id: string) {
     if (demo) {
@@ -174,7 +187,10 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
     }
 
     await api.delete(`/conversations/${id}`)
-    setConversations((current) => current.filter((conversation) => conversation.id !== id))
+    const remainingConversations = conversations.filter(
+      (conversation) => conversation.id !== id,
+    )
+    setConversations(remainingConversations)
     setPinnedConversationIds((current) => {
       if (!current.includes(id)) return current
       const next = current.filter((conversationId) => conversationId !== id)
@@ -184,9 +200,16 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
       return next
     })
 
-    // 删除当前会话后回到空白的新对话，避免 ChatView 继续展示已删除的消息。
-    if (activeConversationId === id || conversationToOpen === id) {
-      createConversation()
+    // 删除当前会话后优先打开剩余的最近会话；删除最后一个会话时才回到
+    // 空白新对话。这样既不会继续展示已删除内容，也不会停在无归属的加载态。
+    // 用 ref 判断最新选择，避免用户在删除请求期间切换到其他会话后被误清空。
+    if (activeConversationIdRef.current === id || conversationToOpenRef.current === id) {
+      const nextConversation = remainingConversations[0]
+      if (nextConversation) {
+        openConversation(nextConversation.id)
+      } else {
+        createConversation()
+      }
     }
   }
 
@@ -274,7 +297,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
             conversationId={conversationToOpen}
             newConversationSignal={newConversationSignal}
             onConversationsChange={setConversations}
-            onActiveConversationChange={setActiveConversationId}
+            onActiveConversationChange={handleActiveConversationChange}
           />
         )}
       </div>

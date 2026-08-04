@@ -9,6 +9,10 @@ import {
 } from "@prisma/client";
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import {
+  createConversationTitle,
+  DEFAULT_CONVERSATION_TITLE,
+} from "../conversation/conversation-title";
 
 /** 负责会话消息持久化，并在数据库消息与 LangChain 消息之间转换。 */
 @Injectable()
@@ -34,9 +38,24 @@ export class MessageService {
         },
       });
 
+      // 首条用户消息作为会话标题，后续消息不再覆盖用户已经看到的名称。
+      const conversation =
+        role === MessageRole.USER
+          ? await transaction.conversation.findUnique({
+              where: { id: conversationId },
+              select: { title: true },
+            })
+          : null;
+      const title = conversation?.title?.trim();
+
       await transaction.conversation.update({
         where: { id: conversationId },
-        data: { updatedAt: new Date() },
+        data: {
+          updatedAt: new Date(),
+          ...(title === DEFAULT_CONVERSATION_TITLE
+            ? { title: createConversationTitle(content) }
+            : {}),
+        },
       });
       return message;
     });

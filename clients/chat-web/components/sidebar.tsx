@@ -133,6 +133,8 @@ export function Sidebar({
           size="lg"
           className="w-full justify-start gap-2"
           onClick={onNewConversation}
+          disabled={view === "chat" && conversations.length === 0}
+          title={view === "chat" && conversations.length === 0 ? "发送第一条消息后才能新建对话" : undefined}
         >
           <Sparkles className="size-4" />
           {view === "chat" ? "新建对话" : "向 AI 提问"}
@@ -215,14 +217,9 @@ export function Sidebar({
               </p>
             )}
             {visibleConversations.length === 0 ? (
-              <button
-                type="button"
-                onClick={onNewConversation}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
-              >
-                <Plus className="size-3.5" />
-                新建第一个对话
-              </button>
+              <p className="px-2.5 py-2 text-xs leading-5 text-muted-foreground">
+                暂无聊天记录，发送消息后会自动创建新对话
+              </p>
             ) : (
               visibleConversations.map((conversation) => (
                 <div
@@ -343,6 +340,7 @@ export function Sidebar({
       </aside>
 
       <DialogPrimitive.Root
+        modal={false}
         open={Boolean(conversationToDelete)}
         onOpenChange={(open) => {
           if (!open && !deletingConversationId) {
@@ -395,11 +393,15 @@ export function Sidebar({
                 disabled={Boolean(deletingConversationId) || !conversationToDelete || !onDeleteConversation}
                 onClick={async () => {
                   if (!conversationToDelete || !onDeleteConversation || deletingConversationId) return
+                  const target = conversationToDelete
                   setConversationError("")
-                  setDeletingConversationId(conversationToDelete.id)
+                  setDeletingConversationId(target.id)
+                  // 先关闭全屏遮罩，再等待后端删除请求。
+                  // 删除接口或数据库发生延迟时，用户仍然可以操作其他区域；
+                  // 失败信息会显示在左侧会话列表上方，避免页面被 Dialog 锁死。
+                  setConversationToDelete(null)
                   try {
-                    await onDeleteConversation(conversationToDelete.id)
-                    setConversationToDelete(null)
+                    await onDeleteConversation(target.id)
                   } catch (reason) {
                     setConversationError(apiErrorMessage(reason))
                   } finally {

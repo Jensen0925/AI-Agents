@@ -29,6 +29,10 @@ type ApiMessage = {
 
 type AnalysisResponse = {
   report?: string | null
+  intent?: "analyze" | "query" | "chat"
+  summary?: string | null
+  queryResponse?: string | null
+  chatResponse?: string | null
   clarificationQuestions?: string[]
   retrievedDocuments?: RetrievedDocument[]
 }
@@ -54,6 +58,15 @@ function formatAssistantReply(response: AnalysisResponse): string {
   }
   if (response.report && typeof response.report === "object") {
     return JSON.stringify(response.report, null, 2)
+  }
+  if (typeof response.chatResponse === "string" && response.chatResponse.trim()) {
+    return response.chatResponse.trim()
+  }
+  if (typeof response.queryResponse === "string" && response.queryResponse.trim()) {
+    return response.queryResponse.trim()
+  }
+  if (typeof response.summary === "string" && response.summary.trim()) {
+    return response.summary.trim()
   }
   if (response.clarificationQuestions?.length) {
     return [
@@ -103,6 +116,8 @@ export function ChatView({
   const hasMessages = messages.length > 0
 
   useEffect(() => {
+    // 新建或删除当前会话时，在同一个 effect 内完成状态重置，避免另一个加载
+    // effect 随后把 loading 重新设为 true，导致空会话永久停留在加载动画。
     if (
       newConversationSignal > 0 &&
       handledNewSignalRef.current !== newConversationSignal
@@ -110,6 +125,10 @@ export function ChatView({
       handledNewSignalRef.current = newConversationSignal
       newConversationModeRef.current = true
       conversationEpochRef.current += 1
+    }
+
+    // React Strict Mode 会在开发环境重复执行 effect；新建对话模式必须在两次执行间保持。
+    if (newConversationModeRef.current && !conversationId) {
       setConversation(null)
       setMessages([])
       setInput("")
@@ -117,16 +136,6 @@ export function ChatView({
       setThinking(false)
       setLoading(false)
       onActiveConversationChange?.(null)
-    }
-  }, [newConversationSignal, onActiveConversationChange])
-
-  useEffect(() => {
-    // React Strict Mode 会在开发环境重复执行 effect；新建对话模式必须在两次执行间保持。
-    if (newConversationModeRef.current && !conversationId) {
-      setConversation(null)
-      setMessages([])
-      setThinking(false)
-      setLoading(false)
       return
     }
     newConversationModeRef.current = false
@@ -161,7 +170,9 @@ export function ChatView({
         if (!isCurrent()) return
 
         const conversations = responseArray<Conversation>(rawConversations)
-        // 首次进入聊天且数据库没有会话时，自动创建一个空白会话，保证输入框可以直接使用。
+        // 没有历史会话时直接展示空白新对话，不要在初始化阶段创建空记录。
+        // 真正发送第一条消息时由 ensureConversation() 创建会话，避免出现默认“新会话”
+        // 并让页面在空会话状态下反复加载。
         let active = conversationId
           ? conversations.find((item) => item.id === conversationId) ?? null
           : conversations[0] ?? null
@@ -169,14 +180,12 @@ export function ChatView({
           if (conversationId) {
             throw new Error("未找到该会话，可能已被删除")
           }
-          const created = await api.post<Conversation>(
-            "/conversations",
-            { title: "新会话" },
-            { timeout: 10_000 },
-          )
           if (!isCurrent()) return
-          active = created.data
-          conversations.unshift(active)
+          setConversation(null)
+          setMessages([])
+          onConversationsChange?.(conversations)
+          onActiveConversationChange?.(null)
+          return
         }
 
         if (!isCurrent()) return
@@ -302,9 +311,7 @@ export function ChatView({
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         {loading ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            <Loader2 className="mr-2 size-4 animate-spin" /> 正在加载会话
-          </div>
+          <ConversationLoading />
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-8">
             {messages.map((message) => (
@@ -406,6 +413,50 @@ function ThinkingBubble() {
         <span className="size-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
         <span className="size-2 animate-bounce rounded-full bg-muted-foreground" />
       </div>
+    </div>
+  )
+}
+
+/** 会话切换期间只保留极简环形进度标识，不渲染骨架块或提示文字。 */
+function ConversationLoading() {
+  return (
+    <div
+      className="flex h-full min-h-[240px] items-center justify-center bg-background"
+      role="status"
+      aria-label="会话内容加载中"
+    >
+      <svg
+        viewBox="0 0 48 48"
+        className="size-9 animate-spin [animation-duration:1.15s]"
+        aria-hidden="true"
+        style={{ filter: "drop-shadow(0 0 2px rgba(82, 82, 91, 0.2))" }}
+      >
+        <defs>
+          <linearGradient
+            id="conversation-loading-gradient"
+            gradientUnits="userSpaceOnUse"
+            x1="8"
+            y1="8"
+            x2="40"
+            y2="40"
+          >
+            <stop offset="0%" stopColor="#f4f4f5" />
+            <stop offset="48%" stopColor="#a1a1aa" />
+            <stop offset="100%" stopColor="#27272a" />
+          </linearGradient>
+        </defs>
+        <circle
+          cx="24"
+          cy="24"
+          r="15"
+          fill="none"
+          stroke="url(#conversation-loading-gradient)"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeDasharray="76 19"
+          transform="rotate(-45 24 24)"
+        />
+      </svg>
     </div>
   )
 }
