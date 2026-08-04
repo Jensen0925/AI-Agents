@@ -29,6 +29,8 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer";
 import { Textarea } from "@/components/ui/textarea";
+import { ComponentRenderer } from "@/components/ai-ui/ComponentRenderer";
+import type { AIUIResponse, UIAction, UIResponse } from "@/types/ui-types";
 import {
   DarkSidebar,
   DEMO_EVENTS,
@@ -55,13 +57,16 @@ interface Message {
   content: string;
   createdAt?: string;
   sources?: RetrievedDocument[];
+  components?: UIResponse[];
 }
 
-interface AnalysisResponse {
-  report?: string | null;
-  clarificationQuestions?: string[];
-  usedAgents?: string[];
-  retrievedDocuments?: RetrievedDocument[];
+const configuredApiBase = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "");
+
+/** UI 协议接口使用绝对地址时绕过 Next 代理，否则复用 axios 的 /api baseURL。 */
+function uiEndpoint(path: "chat" | "action"): string {
+  return configuredApiBase
+    ? `${configuredApiBase}/api/ui-chat/${path}`
+    : `/ui-chat/${path}`;
 }
 
 const QUICK_PROMPTS = [
@@ -89,17 +94,6 @@ const DEMO_CONVERSATION: Conversation = {
   updatedAt: new Date().toISOString(),
 };
 
-function formatAssistantReply(response: AnalysisResponse): string {
-  if (response.report?.trim()) return response.report.trim();
-  if (response.clarificationQuestions?.length) {
-    return [
-      "为了继续分析，请补充以下信息：",
-      ...response.clarificationQuestions.map((question) => `- ${question}`),
-    ].join("\n");
-  }
-  return "分析已完成，但没有生成可展示的报告。";
-}
-
 function formatTime(value?: string): string {
   if (!value) return "刚刚";
   return new Intl.DateTimeFormat("zh-CN", {
@@ -108,7 +102,7 @@ function formatTime(value?: string): string {
   }).format(new Date(value));
 }
 
-function MessageRow({ message }: { message: Message }) {
+function MessageRow({ message, onAction }: { message: Message; onAction: (action: UIAction) => void }) {
   const [copied, setCopied] = useState(false);
   const isUser = message.role === "USER";
 
@@ -146,9 +140,23 @@ function MessageRow({ message }: { message: Message }) {
             知识库增强
           </span>
         </div>
-        <div className="mt-2 max-w-[780px] text-[14px] leading-7 text-[#c9c9d2]">
-          <p className="whitespace-pre-wrap break-words">{message.content}</p>
-        </div>
+        {message.content && (
+          <div className="mt-2 max-w-[780px] text-[14px] leading-7 text-[#c9c9d2]">
+            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          </div>
+        )}
+
+        {message.components && message.components.length > 0 && (
+          <div className="mt-3 max-w-[780px] space-y-3">
+            {message.components.map((component, index) => (
+              <ComponentRenderer
+                key={`${message.id}-component-${index}`}
+                component={component}
+                onAction={onAction}
+              />
+            ))}
+          </div>
+        )}
 
         {message.sources && message.sources.length > 0 && (
           <div className="mt-4">
@@ -411,12 +419,15 @@ export function AIChatContainer() {
     try {
       const response = preview
         ? null
-        : await api.post<AnalysisResponse>(`/conversations/${conversationId}/chat`, {
+        : await api.post<AIUIResponse>(uiEndpoint("chat"), {
+            sessionId: conversationId,
             input: text,
+            history: messages.map((message) => ({
+              role: message.role === "ASSISTANT" ? "assistant" : "user",
+              content: message.content,
+            })),
           });
-      const content = response
-        ? formatAssistantReply(response.data)
-        : "演示模式已收到需求。使用真实账号登录后，我会结合知识库和会话历史完成完整分析。";
+      const content = response?.data.message?.trim() || (response ? "请按下方提示继续。" : "演示模式已收到需求。使用真实账号登录后，我会结合知识库和会话历史完成完整分析。");
       setMessages((current) => [
         ...current,
         {
@@ -424,7 +435,34 @@ export function AIChatContainer() {
           role: "ASSISTANT",
           content,
           createdAt: new Date().toISOString(),
-          sources: response?.data.retrievedDocuments,
+          components: response?.data.components,
+        },
+      ]);
+    } catch (reason) {
+      setError(apiErrorMessage(reason));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  /** 将卡片、表单和确认操作回传给 UI 状态机，并把下一步组件追加到当前会话。 */
+  async function handleUIAction(action: UIAction) {
+    if (!activeId || sending || preview) return;
+    setError("");
+    setSending(true);
+    try {
+      const { data } = await api.post<AIUIResponse>(uiEndpoint("action"), {
+        sessionId: activeId,
+        action,
+      });
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "ASSISTANT",
+          content: data.message?.trim() || "请按下方提示继续。",
+          components: data.components,
+          createdAt: new Date().toISOString(),
         },
       ]);
     } catch (reason) {
@@ -570,7 +608,11 @@ export function AIChatContainer() {
               ) : (
                 <div className="mx-auto flex w-full max-w-[900px] flex-col gap-8 px-4 py-8 sm:px-8 sm:py-10">
                   {messages.map((message) => (
-                    <MessageRow key={message.id} message={message} />
+                    <MessageRow
+                      key={message.id}
+                      message={message}
+                      onAction={(action) => void handleUIAction(action)}
+                    />
                   ))}
                   {sending && (
                     <div className="flex gap-3.5" aria-live="polite">

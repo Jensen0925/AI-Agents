@@ -3,7 +3,7 @@ import {
   HumanMessage,
   type MessageContent,
 } from "@langchain/core/messages";
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import {
   type DocumentSearchResult,
   SearchService,
@@ -69,6 +69,8 @@ function analysisConclusion(orchestration: OrchestrationResult): string {
  */
 @Injectable()
 export class AdvancedAnalysisService {
+  private readonly logger = new Logger(AdvancedAnalysisService.name);
+
   constructor(
     private readonly orchestratorService: OrchestratorService,
     private readonly messageService: MessageService,
@@ -87,12 +89,35 @@ export class AdvancedAnalysisService {
       conversationId,
       this.messageService,
     );
-    const history = await chatHistory.getMessages();
-    const retrievedDocuments = await this.searchService.similaritySearch(
-      input,
-      userId,
-      3,
-    );
+    let history: Awaited<ReturnType<DbChatHistory["getMessages"]>> = [];
+    try {
+      history = await chatHistory.getMessages();
+    } catch (error) {
+      // 历史消息读取失败时仍允许当前消息进入分析，避免 UI 因旧数据损坏而
+      // 完全不可用；本轮消息写入仍会在分析结束后按原流程执行。
+      this.logger.warn(
+        `Conversation history unavailable; continuing without history: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    let retrievedDocuments: DocumentSearchResult[] = [];
+    try {
+      retrievedDocuments = await this.searchService.similaritySearch(
+        input,
+        userId,
+        3,
+      );
+    } catch (error) {
+      // 语义检索属于可选增强能力；模型或向量库不可用时使用空上下文，
+      // 仍然返回人工审核或模型可生成的分析结果，而不是 HTTP 500。
+      this.logger.warn(
+        `Document retrieval unavailable; continuing without context: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
     const historyContext = history
       .map((message) => {
         const role = message.getType() === "human" ? "用户" : "助手";

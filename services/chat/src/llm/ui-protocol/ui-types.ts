@@ -1,4 +1,9 @@
-/** UI 协议类型与 Nest 服务端保持一致，避免前后端手写字段漂移。 */
+/**
+ * UI 协议中的通用选项。
+ *
+ * 前端可以直接使用 value 作为回传给 /api/ui-chat/action 的稳定标识，
+ * 不需要依赖展示文案做分支判断。
+ */
 export interface UIOption {
   label: string;
   value: string;
@@ -6,12 +11,14 @@ export interface UIOption {
   disabled?: boolean;
 }
 
+/** 纯文本或 Markdown 回复。 */
 export interface TextUIResponse {
   type: "text";
   content: string;
   markdown?: boolean;
 }
 
+/** 单选/多选卡片。 */
 export interface SelectionUIResponse {
   type: "selection";
   id?: string;
@@ -25,6 +32,7 @@ export interface SelectionUIResponse {
 
 export type FormFieldType = "input" | "select" | "textarea" | "date" | "number";
 
+/** 动态表单字段定义。 */
 export interface FormField {
   name: string;
   label: string;
@@ -35,6 +43,7 @@ export interface FormField {
   options?: UIOption[];
 }
 
+/** 动态表单组件。 */
 export interface FormUIResponse {
   type: "form";
   id?: string;
@@ -45,6 +54,7 @@ export interface FormUIResponse {
   cancelLabel?: string;
 }
 
+/** 确认对话框，适合提交分析、写入报告等需要用户确认的操作。 */
 export interface ConfirmationUIResponse {
   type: "confirmation";
   id?: string;
@@ -69,6 +79,7 @@ export interface CardAction {
   disabled?: boolean;
 }
 
+/** 需求详情、检索结果或商品信息展示卡片。 */
 export interface CardUIResponse {
   type: "card";
   id?: string;
@@ -88,6 +99,7 @@ export interface UIStep {
   status: StepStatus;
 }
 
+/** 多阶段需求分析进度。 */
 export interface StepsUIResponse {
   type: "steps";
   id?: string;
@@ -103,6 +115,7 @@ export interface TableColumn {
 
 export type TableCell = string | number | boolean | null;
 
+/** 批量展示结构化数据。 */
 export interface TableUIResponse {
   type: "table";
   id?: string;
@@ -118,6 +131,7 @@ export interface ActionButton {
   disabled?: boolean;
 }
 
+/** 一组可点击的后续动作。 */
 export interface ActionButtonsUIResponse {
   type: "action_buttons";
   id?: string;
@@ -125,6 +139,7 @@ export interface ActionButtonsUIResponse {
   buttons: ActionButton[];
 }
 
+/** AI 可以返回的任意一个 UI 组件。 */
 export type UIResponse =
   | TextUIResponse
   | SelectionUIResponse
@@ -135,11 +150,13 @@ export type UIResponse =
   | TableUIResponse
   | ActionButtonsUIResponse;
 
+/** 结构化 AI 回复信封，message 用于非组件式补充说明。 */
 export interface AIUIResponse {
   message?: string;
   components: UIResponse[];
 }
 
+/** 前端提交给后端的 UI 操作。 */
 export type UIAction =
   | {
       type: "selection";

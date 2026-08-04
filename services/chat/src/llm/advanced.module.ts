@@ -12,6 +12,9 @@ import { OrchestratorService } from "./agents/orchestrator.service";
 import { EmbeddingModule } from "./embedding/embedding.module";
 import { FilesystemService } from "./filesystem/filesystem.service";
 import { MemoryModule } from "./memory/memory.module";
+import { UiChatController } from "./ui-protocol/ui-chat.controller";
+import { UiFlowService } from "./ui-protocol/ui-flow.service";
+import { UiResponseService } from "./ui-protocol/ui-response.service";
 
 @Module({
   imports: [DocumentModule, EmbeddingModule, MemoryModule, MessageModule],
@@ -20,16 +23,21 @@ import { MemoryModule } from "./memory/memory.module";
     FilesystemController,
     EmbeddingController,
     AgentsController,
+    UiChatController,
   ],
   providers: [
     FilesystemService,
     OrchestratorService,
     AdvancedAnalysisService,
+    UiResponseService,
+    UiFlowService,
   ],
   exports: [
     FilesystemService,
     OrchestratorService,
     AdvancedAnalysisService,
+    UiResponseService,
+    UiFlowService,
   ],
 })
 export class AdvancedModule {}
