@@ -6,7 +6,9 @@ import { cn } from "@/lib/utils"
 import { apiErrorMessage } from "@/lib/api"
 import type { Category } from "@/lib/knowledge-data"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { ThemeToggle } from "@/components/theme-toggle"
+import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu"
 import {
   AlertTriangle,
   CloudLightning,
@@ -14,6 +16,10 @@ import {
   Loader2,
   LogOut,
   MessagesSquare,
+  MoreHorizontal,
+  Pencil,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Sparkles,
@@ -25,7 +31,9 @@ type View = "documents" | "chat"
 export type SidebarConversation = {
   id: string
   title: string
+  createdAt?: string
   updatedAt?: string
+  pinned?: boolean
 }
 
 type SidebarProps = {
@@ -40,6 +48,8 @@ type SidebarProps = {
   conversations?: SidebarConversation[]
   activeConversationId?: string | null
   onSelectConversation?: (id: string) => void
+  onPinConversation?: (id: string) => Promise<void> | void
+  onRenameConversation?: (id: string, title: string) => Promise<void> | void
   onDeleteConversation?: (id: string) => Promise<void> | void
   onLogout: () => void
 }
@@ -56,6 +66,8 @@ export function Sidebar({
   conversations = [],
   activeConversationId,
   onSelectConversation,
+  onPinConversation,
+  onRenameConversation,
   onDeleteConversation,
   onLogout,
 }: SidebarProps) {
@@ -63,14 +75,45 @@ export function Sidebar({
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
   const [conversationError, setConversationError] = useState("")
   const [conversationToDelete, setConversationToDelete] = useState<SidebarConversation | null>(null)
+  const [conversationToRename, setConversationToRename] = useState<SidebarConversation | null>(null)
+  const [renameValue, setRenameValue] = useState("")
+  const [renameError, setRenameError] = useState("")
+  const [renamingConversationId, setRenamingConversationId] = useState<string | null>(null)
+  const [pinningConversationId, setPinningConversationId] = useState<string | null>(null)
   const avatarText = (userName || userEmail || "C").trim().slice(0, 1).toUpperCase()
   const visibleConversations = useMemo(() => {
     const keyword = conversationSearch.trim().toLowerCase()
-    if (!keyword) return conversations
-    return conversations.filter((conversation) =>
+    const filtered = !keyword
+      ? conversations
+      : conversations.filter((conversation) =>
       conversation.title.toLowerCase().includes(keyword),
+        )
+
+    // 置顶会话固定排在列表顶部，同时保持服务端返回的时间顺序。
+    return [...filtered].sort(
+      (left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)),
     )
   }, [conversationSearch, conversations])
+
+  async function handlePinConversation(conversation: SidebarConversation) {
+    if (!onPinConversation || pinningConversationId) return
+    setConversationError("")
+    setPinningConversationId(conversation.id)
+    try {
+      await onPinConversation(conversation.id)
+    } catch (reason) {
+      setConversationError(apiErrorMessage(reason))
+    } finally {
+      setPinningConversationId(null)
+    }
+  }
+
+  function openRenameDialog(conversation: SidebarConversation) {
+    setConversationError("")
+    setRenameError("")
+    setRenameValue(conversation.title || "")
+    setConversationToRename(conversation)
+  }
 
   return (
     <>
@@ -200,22 +243,69 @@ export function Sidebar({
                     <MessagesSquare className="size-3.5 shrink-0" />
                     <span className="truncate">{conversation.title || "新会话"}</span>
                   </button>
-                  {onDeleteConversation && (
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        if (deletingConversationId) return
-                        setConversationError("")
-                        setConversationToDelete(conversation)
-                      }}
-                      disabled={Boolean(deletingConversationId)}
-                      aria-label={`删除会话${conversation.title || "新会话"}`}
-                      title="删除会话"
-                      className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100 disabled:cursor-wait disabled:opacity-60"
-                    >
-                      <Trash2 className="size-3.5" />
-                    </button>
+                  {(onPinConversation || onRenameConversation || onDeleteConversation) && (
+                    <DropdownMenuPrimitive.Root>
+                      <DropdownMenuPrimitive.Trigger asChild>
+                        <button
+                          type="button"
+                          onClick={(event) => event.stopPropagation()}
+                          disabled={Boolean(deletingConversationId) || Boolean(pinningConversationId)}
+                          aria-label={`管理会话${conversation.title || "新会话"}`}
+                          title="会话操作"
+                          className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-all hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {pinningConversationId === conversation.id ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <MoreHorizontal className="size-3.5" />
+                          )}
+                        </button>
+                      </DropdownMenuPrimitive.Trigger>
+                      <DropdownMenuPrimitive.Portal>
+                        <DropdownMenuPrimitive.Content
+                          align="end"
+                          sideOffset={4}
+                          className="z-50 min-w-36 overflow-hidden rounded-lg border border-border bg-popover p-1 text-popover-foreground shadow-lg"
+                        >
+                          {onPinConversation && (
+                            <DropdownMenuPrimitive.Item
+                              disabled={Boolean(pinningConversationId)}
+                              onSelect={() => void handlePinConversation(conversation)}
+                              className="flex cursor-default select-none items-center gap-2 rounded-md px-2.5 py-2 text-xs outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                            >
+                              {conversation.pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
+                              {conversation.pinned ? "取消置顶" : "置顶"}
+                            </DropdownMenuPrimitive.Item>
+                          )}
+                          {onRenameConversation && (
+                            <DropdownMenuPrimitive.Item
+                              onSelect={() => openRenameDialog(conversation)}
+                              className="flex cursor-default select-none items-center gap-2 rounded-md px-2.5 py-2 text-xs outline-none transition-colors data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                            >
+                              <Pencil className="size-3.5" />
+                              重命名
+                            </DropdownMenuPrimitive.Item>
+                          )}
+                          {onDeleteConversation && (
+                            <>
+                              <DropdownMenuPrimitive.Separator className="my-1 h-px bg-border" />
+                              <DropdownMenuPrimitive.Item
+                                disabled={Boolean(deletingConversationId)}
+                                onSelect={() => {
+                                  if (deletingConversationId) return
+                                  setConversationError("")
+                                  setConversationToDelete(conversation)
+                                }}
+                                className="flex cursor-default select-none items-center gap-2 rounded-md px-2.5 py-2 text-xs text-destructive outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-destructive/10 data-[highlighted]:text-destructive"
+                              >
+                                <Trash2 className="size-3.5" />
+                                删除
+                              </DropdownMenuPrimitive.Item>
+                            </>
+                          )}
+                        </DropdownMenuPrimitive.Content>
+                      </DropdownMenuPrimitive.Portal>
+                    </DropdownMenuPrimitive.Root>
                   )}
                 </div>
               ))
@@ -324,8 +414,91 @@ export function Sidebar({
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
+
+      <DialogPrimitive.Root
+        open={Boolean(conversationToRename)}
+        onOpenChange={(open) => {
+          if (!open && !renamingConversationId) {
+            setConversationToRename(null)
+            setRenameError("")
+          }
+        }}
+      >
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] transition-opacity" />
+          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl outline-none">
+            <div className="p-6">
+              <DialogPrimitive.Title className="text-base font-semibold text-foreground">
+                重命名会话
+              </DialogPrimitive.Title>
+              <DialogPrimitive.Description className="mt-1.5 text-sm leading-6 text-muted-foreground">
+                为这个会话设置一个容易识别的名称。
+              </DialogPrimitive.Description>
+              <Input
+                autoFocus
+                value={renameValue}
+                maxLength={80}
+                onChange={(event) => setRenameValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                    event.preventDefault()
+                    void saveRename()
+                  }
+                }}
+                placeholder="输入会话名称"
+                className="mt-4"
+              />
+              {renameError && (
+                <p className="mt-3 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive">
+                  {renameError}
+                </p>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/30 px-6 py-4">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={Boolean(renamingConversationId)}
+                onClick={() => setConversationToRename(null)}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={Boolean(renamingConversationId) || !conversationToRename || !onRenameConversation}
+                onClick={() => void saveRename()}
+              >
+                {renamingConversationId ? <Loader2 className="size-3.5 animate-spin" /> : <Pencil className="size-3.5" />}
+                {renamingConversationId ? "保存中…" : "保存"}
+              </Button>
+            </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
     </>
   )
+
+  async function saveRename() {
+    if (!conversationToRename || !onRenameConversation || renamingConversationId) return
+    const title = renameValue.trim()
+    if (!title) {
+      setRenameError("会话名称不能为空")
+      return
+    }
+
+    setRenameError("")
+    setRenamingConversationId(conversationToRename.id)
+    try {
+      await onRenameConversation(conversationToRename.id, title)
+      setConversationToRename(null)
+    } catch (reason) {
+      setRenameError(apiErrorMessage(reason))
+    } finally {
+      setRenamingConversationId(null)
+    }
+  }
 }
 
 function NavItem({

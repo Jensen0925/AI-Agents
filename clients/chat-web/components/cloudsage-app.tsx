@@ -39,12 +39,40 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
   const [uploading, setUploading] = useState(false)
   const [newConversationSignal, setNewConversationSignal] = useState(0)
   const [conversations, setConversations] = useState<SidebarConversation[]>([])
+  const [pinnedConversationIds, setPinnedConversationIds] = useState<string[]>([])
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   // 只有用户从侧栏点选会话时才传给 ChatView，避免 ChatView 自己创建会话后被重复加载。
   const [conversationToOpen, setConversationToOpen] = useState<string | undefined>(undefined)
 
   const demo = hydrated && isDemoSession()
   const categories = useMemo<Category[]>(() => buildCategories(documents), [documents])
+  const pinnedConversationStorageKey = session
+    ? `cloudsage:pinned-conversations:${session.user.id}`
+    : null
+
+  useEffect(() => {
+    if (!hydrated || !session || !pinnedConversationStorageKey) return
+    try {
+      const raw = window.localStorage.getItem(pinnedConversationStorageKey)
+      const parsed: unknown = raw ? JSON.parse(raw) : []
+      setPinnedConversationIds(
+        Array.isArray(parsed)
+          ? parsed.filter((value): value is string => typeof value === "string")
+          : [],
+      )
+    } catch {
+      setPinnedConversationIds([])
+    }
+  }, [hydrated, pinnedConversationStorageKey, session])
+
+  const displayConversations = useMemo(
+    () =>
+      conversations.map((conversation) => ({
+        ...conversation,
+        pinned: pinnedConversationIds.includes(conversation.id),
+      })),
+    [conversations, pinnedConversationIds],
+  )
 
   const loadDocuments = useCallback(async () => {
     if (isDemoSession()) {
@@ -147,11 +175,56 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
 
     await api.delete(`/conversations/${id}`)
     setConversations((current) => current.filter((conversation) => conversation.id !== id))
+    setPinnedConversationIds((current) => {
+      if (!current.includes(id)) return current
+      const next = current.filter((conversationId) => conversationId !== id)
+      if (pinnedConversationStorageKey) {
+        window.localStorage.setItem(pinnedConversationStorageKey, JSON.stringify(next))
+      }
+      return next
+    })
 
     // 删除当前会话后回到空白的新对话，避免 ChatView 继续展示已删除的消息。
     if (activeConversationId === id || conversationToOpen === id) {
       createConversation()
     }
+  }
+
+  async function renameConversation(id: string, title: string) {
+    const nextTitle = title.trim()
+    if (!nextTitle) throw new Error("会话名称不能为空")
+
+    if (demo) {
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === id ? { ...conversation, title: nextTitle } : conversation,
+        ),
+      )
+      return
+    }
+
+    const { data } = await api.patch<SidebarConversation>(`/conversations/${id}`, {
+      title: nextTitle,
+    })
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === id
+          ? { ...conversation, title: data.title || nextTitle, updatedAt: data.updatedAt }
+          : conversation,
+      ),
+    )
+  }
+
+  function pinConversation(id: string) {
+    setPinnedConversationIds((current) => {
+      const next = current.includes(id)
+        ? current.filter((conversationId) => conversationId !== id)
+        : [...current, id]
+      if (pinnedConversationStorageKey) {
+        window.localStorage.setItem(pinnedConversationStorageKey, JSON.stringify(next))
+      }
+      return next
+    })
   }
 
   function logout() {
@@ -174,9 +247,11 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
         userName={session.user.name}
         userEmail={session.user.email}
         onNewConversation={createConversation}
-        conversations={conversations}
+        conversations={displayConversations}
         activeConversationId={activeConversationId}
         onSelectConversation={openConversation}
+        onPinConversation={pinConversation}
+        onRenameConversation={renameConversation}
         onDeleteConversation={deleteConversation}
         onLogout={logout}
       />

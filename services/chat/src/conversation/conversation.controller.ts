@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -27,6 +28,10 @@ interface CreateConversationBody {
 
 interface ChatBody {
   input: string;
+}
+
+interface RenameConversationBody {
+  title: string;
 }
 
 function requireText(value: unknown, field: string): string {
@@ -109,6 +114,19 @@ export class ConversationController {
       userId,
       conversationId,
       requireText(body?.input, "input"),
+    );
+  }
+
+  @Patch(":id")
+  rename(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") rawConversationId: string,
+    @Body() body: RenameConversationBody,
+  ) {
+    return this.conversationService.rename(
+      requireText(rawConversationId, "id"),
+      currentUserId(request),
+      requireText(body?.title, "title"),
     );
   }
 
