@@ -1,0 +1,98 @@
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { describe, expect, it } from "bun:test";
+import {
+  createAnalysisSupervisorSubGraph,
+  routeToExperts,
+} from "../src/llm/graph/experts";
+
+type MessageLike = { content: unknown };
+
+function textOf(content: unknown): string {
+  return typeof content === "string" ? content : "";
+}
+
+function createSupervisorModel(activeExperts: string[]) {
+  const calls: string[] = [];
+
+  const model = {
+    withStructuredOutput: () => ({
+      invoke: async () => ({
+        activeExperts,
+        reasoning: "测试路由",
+      }),
+    }),
+    invoke: async (messages: MessageLike[]) => {
+      const system = textOf(messages[0]?.content);
+      const user = textOf(messages.at(-1)?.content);
+
+      if (system.includes("功能需求专家")) {
+        calls.push("functional");
+        return new AIMessage("功能结论：拆分批量导入流程与验收标准。");
+      }
+      if (system.includes("性能与可靠性专家")) {
+        calls.push("performance");
+        return new AIMessage("性能结论：需要定义批处理容量和时延指标。");
+      }
+      if (system.includes("安全专家")) {
+        calls.push("security");
+        return new AIMessage("安全结论：需要校验上传文件并隔离用户数据。");
+      }
+      if (system.includes("合规与治理专家")) {
+        calls.push("compliance");
+        return new AIMessage("合规结论：需要明确数据保存期限。");
+      }
+      if (system.includes("汇总负责人")) {
+        calls.push("aggregator");
+        expect(user).toContain("功能结论");
+        expect(user).toContain("安全结论");
+        expect(user).not.toContain("性能结论");
+        expect(user).not.toContain("合规结论");
+        return new AIMessage("汇总结论：功能和安全方案已完成。");
+      }
+
+      throw new Error(`Unexpected model call: ${system}`);
+    },
+  } as unknown as BaseChatModel;
+
+  return { model, calls };
+}
+
+describe("analysis supervisor subgraph", () => {
+  it("routes to multiple selected experts in parallel and aggregates only them", async () => {
+    const { model, calls } = createSupervisorModel([
+      "functional",
+      "security",
+    ]);
+    const graph = createAnalysisSupervisorSubGraph(model);
+
+    const result = await graph.invoke({
+      input: "实现 Excel 批量导入，并确保不同用户的数据隔离",
+      messages: [
+        new HumanMessage("实现 Excel 批量导入，并确保不同用户的数据隔离"),
+      ],
+      extracted: "批量导入 Excel；用户数据隔离",
+      retrievedContext: "上传文件必须限制格式和大小。",
+    });
+
+    expect(result.activeExperts).toEqual(["functional", "security"]);
+    expect(result.functionalAnalysis).toContain("功能结论");
+    expect(result.securityAnalysis).toContain("安全结论");
+    expect(result.performanceAnalysis).toBe("");
+    expect(result.complianceAnalysis).toBe("");
+    expect(result.analysisResult).toContain("汇总结论");
+    expect(new Set(calls.slice(0, 2))).toEqual(
+      new Set(["functional", "security"]),
+    );
+    expect(calls.at(-1)).toBe("aggregator");
+    expect(calls.filter((call) => call === "aggregator")).toHaveLength(1);
+  });
+
+  it("returns an array of expert nodes for parallel conditional routing", () => {
+    const routes = routeToExperts({
+      activeExperts: ["performance", "compliance"],
+    } as Parameters<typeof routeToExperts>[0]);
+
+    expect(routes).toEqual(["performanceExpert", "complianceExpert"]);
+  });
+});

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { load } from "js-yaml";
 
@@ -123,8 +123,21 @@ export function loadLangchainConfig(): LangchainConfig {
     return cachedConfig;
   }
 
-  // Turbo 会以 workspace 为 cwd 启动服务，因此配置路径固定从 chat 根目录解析。
-  const configPath = resolve(process.cwd(), "config/langchain.yaml");
+  // 开发环境可能从 services/chat、仓库根目录或 Docker 工作目录启动。
+  // 不能只依赖 process.cwd() 的单一路径，否则 `bun run dev` 从根目录
+  // 启动时会误报找不到配置，随后模型工厂和整个聊天请求都会降级/失败。
+  const configCandidates = [
+    resolve(process.cwd(), "config/langchain.yaml"),
+    resolve(process.cwd(), "services/chat/config/langchain.yaml"),
+    resolve(process.cwd(), "../config/langchain.yaml"),
+  ];
+  const configPath = configCandidates.find((candidate) => existsSync(candidate));
+  if (!configPath) {
+    throw new Error(
+      `LangChain config file not found. Tried: ${configCandidates.join(", ")}`,
+    );
+  }
+
   const parsed: unknown = load(readFileSync(configPath, "utf8"));
   assertRecord(parsed, "root");
 

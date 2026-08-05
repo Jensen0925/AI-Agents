@@ -77,6 +77,16 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
       })),
     [conversations, pinnedConversationIds],
   )
+  // 聊天区标题与侧栏共用同一份会话列表数据。这样在侧栏重命名当前会话后，
+  // 不需要等待下一次会话历史请求，顶部标题即可立即更新。
+  const activeConversationTitle = useMemo(
+    () =>
+      activeConversationId
+        ? conversations.find((conversation) => conversation.id === activeConversationId)
+            ?.title
+        : undefined,
+    [activeConversationId, conversations],
+  )
 
   const loadDocuments = useCallback(async () => {
     if (isDemoSession()) {
@@ -295,6 +305,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
         ) : (
           <ChatView
             conversationId={conversationToOpen}
+            conversationTitle={activeConversationTitle}
             newConversationSignal={newConversationSignal}
             onConversationsChange={setConversations}
             onActiveConversationChange={handleActiveConversationChange}

@@ -4,6 +4,8 @@ import { JwtAuthGuard } from "../src/auth/jwt-auth.guard";
 import { ConversationController } from "../src/conversation/conversation.controller";
 import { ConversationService } from "../src/conversation/conversation.service";
 import type { AdvancedAnalysisService } from "../src/llm/advanced-analysis.service";
+import type { UiFlowService } from "../src/llm/ui-protocol/ui-flow.service";
+import type { UiResponseService } from "../src/llm/ui-protocol/ui-response.service";
 import type { MessageService } from "../src/message/message.service";
 import type { PrismaService } from "../src/prisma/prisma.service";
 
@@ -66,6 +68,8 @@ describe("ConversationController", () => {
       { findById } as unknown as ConversationService,
       {} as MessageService,
       { analyze } as unknown as AdvancedAnalysisService,
+      {} as UiResponseService,
+      {} as UiFlowService,
     );
 
     const result = await controller.chat(

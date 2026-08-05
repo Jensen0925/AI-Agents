@@ -24,6 +24,11 @@ import {
 } from "../agents/sub-agents";
 import { createChatModel } from "../model.factory";
 import { analysisTools } from "./analysis-tools";
+import {
+  createAnalysisSupervisorSubGraph,
+  EXPERT_NODE_BY_NAME,
+  type ExpertName,
+} from "./experts";
 
 const DEFAULT_RETRIEVED_CONTEXT =
   "当前用户知识库没有检索到相关文档。";
@@ -54,17 +59,58 @@ const CLASSIFIER_SYSTEM_PROMPT = `你是需求分析系统的意图分类器，�
 
 必须返回符合 Schema 的 intent 和简短 reasoning，不要回答用户的问题。`;
 
+const TRIAGE_SYSTEM_PROMPT = `你是需求分析系统的 Handoff 分诊协调员。你需要判断当前请求应当直接回答，还是交接给专业工作流处理。
+
+可选动作：
+1. answer
+   - 适用于问候、寒暄、能力介绍、简单帮助说明，以及无需调用需求分析流程即可可靠回答的问题。
+   - 必须在 response 中给出完整、简洁、可直接展示给用户的回复。
+2. handoff_to_analysis
+   - 适用于新需求提交、需求拆解、功能分析、用户故事、验收标准、技术复杂度或综合报告生成。
+   - 在 reason 中说明为什么需要交接给完整需求分析链。
+3. handoff_to_risk
+   - 适用于用户明确只要求风险、安全、认证、权限、合规、冲突或隐私专项评估的场景。
+   - 如果用户同时要求完整需求分析和风险评估，应选择 handoff_to_analysis，由完整流程统一处理。
+   - 在 reason 中说明需要关注的风险方向。
+
+边界规则：
+- “分析某需求的风险并给出完整方案”属于 handoff_to_analysis。
+- “只检查这个登录需求的安全风险”属于 handoff_to_risk。
+- 无法确定但明显属于需求业务时，默认 handoff_to_analysis。
+- 不要在 handoff 动作中提前生成专业结论，只输出交接理由。
+
+必须严格返回符合 Schema 的 action、response、reason。`;
+
 const intentClassificationSchema = z.object({
   intent: z.enum(["analyze", "query", "chat"]),
   reasoning: z.string(),
 });
 
-export type RequirementIntent = z.infer<
-  typeof intentClassificationSchema
->["intent"];
+type ClassifierIntent = z.infer<typeof intentClassificationSchema>["intent"];
+
+/**
+ * Handoff 分诊协议。
+ *
+ * answer 表示分诊节点可以直接回答；另外两个 action 表示将任务交接给完整
+ * 需求分析链或风险专项链。response 只在 answer 时作为面向用户的回复，
+ * reason 用于记录交接依据，便于日志审计和后续 Agent 理解上下文。
+ */
+export const triageSchema = z.object({
+  action: z.enum([
+    "answer",
+    "handoff_to_analysis",
+    "handoff_to_risk",
+  ]),
+  response: z.string().optional(),
+  reason: z.string().optional(),
+});
+
+export type TriageAction = z.infer<typeof triageSchema>["action"];
+export type RequirementIntent = ClassifierIntent | "risk_only";
 
 export type AnalysisGraphStep =
   | "classifier"
+  | "triage"
   | "extractStep"
   | "clarifyStep"
   | "analysisStep"
@@ -73,8 +119,17 @@ export type AnalysisGraphStep =
   | "analysisFinalize"
   | "riskStep"
   | "summaryStep"
+  | "riskOnlyHandler"
   | "queryHandler"
   | "chatHandler";
+
+export type AnalysisSubgraphStep =
+  | "analysisSupervisor"
+  | "functionalExpert"
+  | "performanceExpert"
+  | "securityExpert"
+  | "complianceExpert"
+  | "analysisAggregator";
 
 /**
  * 需求分析图的共享状态。
@@ -86,6 +141,11 @@ export const RequirementAnalysisState = Annotation.Root({
   intent: Annotation<RequirementIntent>({
     reducer: (_current, next) => next,
     default: () => "analyze",
+  }),
+  /** Handoff 分诊节点给出的交接理由；直接回答时通常为空。 */
+  handoffReason: Annotation<string>({
+    reducer: (_current, next) => next,
+    default: () => "",
   }),
   extracted: Annotation<string>(),
   clarified: Annotation<string>(),
@@ -127,6 +187,33 @@ export const RequirementAnalysisState = Annotation.Root({
     reducer: (_current, next) => next,
     default: () => 0,
   }),
+  /** Supervisor 本轮实际调度的专家；覆盖更新，防止跨请求残留。 */
+  activeExperts: Annotation<ExpertName[]>({
+    reducer: (_current, next) => next,
+    default: () => [],
+  }),
+  /** Supervisor 选择专家的依据，便于调试和审计。 */
+  supervisorReasoning: Annotation<string>({
+    reducer: (_current, next) => next,
+    default: () => "",
+  }),
+  /** 四个专家分别写入独立字段，支持并行执行且不会发生 LastValue 冲突。 */
+  functionalAnalysis: Annotation<string>({
+    reducer: (_current, next) => next,
+    default: () => "",
+  }),
+  performanceAnalysis: Annotation<string>({
+    reducer: (_current, next) => next,
+    default: () => "",
+  }),
+  securityAnalysis: Annotation<string>({
+    reducer: (_current, next) => next,
+    default: () => "",
+  }),
+  complianceAnalysis: Annotation<string>({
+    reducer: (_current, next) => next,
+    default: () => "",
+  }),
   queryResponse: Annotation<string>(),
   chatResponse: Annotation<string>(),
   // 检索上下文是服务端注入的运行时增强数据，不参与对外输出；
@@ -147,18 +234,23 @@ export interface RunAnalysisGraphOutput {
   /** 保留图的消息状态，兼容 8.3 直接读取 State 的调用方。 */
   messages: BaseMessage[];
   intent: RequirementIntent;
+  handoffReason?: string;
   extracted?: string;
   clarified?: string;
   analysis?: string;
   risk?: string;
   analysisResult?: string;
   toolLoopCount?: number;
+  activeExperts?: ExpertName[];
+  supervisorReasoning?: string;
+  functionalAnalysis?: string;
+  performanceAnalysis?: string;
+  securityAnalysis?: string;
+  complianceAnalysis?: string;
   critique?: string;
   reviseCount?: number;
-  /** ReAct 子图的实际节点路径，供日志、调试和前端展示使用。 */
-  analysisSubgraphSteps?: Array<
-    "analysisAgent" | "analysisTools" | "analysisFinalize"
-  >;
+  /** Supervisor 分析子图的实际节点路径，供日志、调试和前端展示使用。 */
+  analysisSubgraphSteps?: AnalysisSubgraphStep[];
   riskResult?: string;
   summary: string;
   queryResponse?: string;
@@ -195,7 +287,16 @@ function getMessageText(message: BaseMessage): string {
 
 /** 从消息状态中读取本次请求的用户输入。 */
 function getInput(state: RequirementAnalysisStateValue): string {
-  const message = state.messages.at(-1);
+  // Handoff 会把分诊结果作为 AIMessage 追加到 messages。后续业务节点必须
+  // 继续读取最后一条用户消息，不能把分诊理由误当成本轮需求输入。
+  let message: BaseMessage | undefined;
+  for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+    if (state.messages[index]?.type === "human") {
+      message = state.messages[index];
+      break;
+    }
+  }
+
   const input = (message ? getMessageText(message) : state.input).trim();
   if (!input) {
     throw new Error("Requirement analysis input cannot be empty");
@@ -418,14 +519,13 @@ export function createAnalysisSubGraph(model: ChatModel = createChatModel()) {
 }
 
 function buildAnalysisSubgraphSteps(
-  toolLoopCount: number,
-): RunAnalysisSubGraphOutput["steps"] {
-  const steps: RunAnalysisSubGraphOutput["steps"] = ["analysisAgent"];
-  for (let index = 0; index < toolLoopCount; index += 1) {
-    steps.push("analysisTools", "analysisAgent");
-  }
-  steps.push("analysisFinalize");
-  return steps;
+  activeExperts: ExpertName[],
+): AnalysisSubgraphStep[] {
+  return [
+    "analysisSupervisor",
+    ...activeExperts.map((expert) => EXPERT_NODE_BY_NAME[expert]),
+    "analysisAggregator",
+  ];
 }
 
 /**
@@ -471,7 +571,7 @@ export async function runAnalysisSubGraph(
  * 分类模型不可用时的确定性降级规则。
  * 带编号的读取请求优先 query；纯闲聊优先 chat；其余业务请求默认 analyze。
  */
-export function classifyIntentByKeywords(input: string): RequirementIntent {
+export function classifyIntentByKeywords(input: string): ClassifierIntent {
   const requirementIdPattern = /\bREQ-\d{8}-\d{3,}\b/i;
   const hasRequirementId = requirementIdPattern.test(input);
   const hasQueryKeyword =
@@ -505,6 +605,108 @@ export function classifyIntentByKeywords(input: string): RequirementIntent {
   }
 
   return "analyze";
+}
+
+type TriageResult = z.infer<typeof triageSchema>;
+
+/** Structured Output 不可用时的本地 Handoff 降级规则。 */
+function triageByKeywords(input: string): TriageResult {
+  const hasBusinessKeyword =
+    /(需求|功能|系统|用户|验收|风险|安全|合规|权限|认证|冲突|隐私|开发|实现)/i.test(
+      input,
+    );
+  const hasChatKeyword =
+    /^(你好|您好|嗨|hi|hello|谢谢|多谢|再见)|天气不错|你是谁|能做什么/i.test(
+      input,
+    );
+
+  if (hasChatKeyword && !hasBusinessKeyword) {
+    return {
+      action: "answer",
+      response:
+        "你好！我是 CloudSage 需求分析助手，可以协助需求拆解、风险评估和知识库查询。",
+    };
+  }
+
+  const hasRiskKeyword = /(风险|安全|漏洞|认证|鉴权|权限|合规|冲突|隐私)/i.test(
+    input,
+  );
+  const requestsCompleteAnalysis =
+    /(完整|综合|全面).*(分析|方案|报告)|功能分解|用户故事|验收标准/i.test(
+      input,
+    );
+
+  if (hasRiskKeyword && !requestsCompleteAnalysis) {
+    return {
+      action: "handoff_to_risk",
+      reason: "请求聚焦风险、安全或合规专项评估，需要交接给风险分析链。",
+    };
+  }
+
+  return {
+    action: "handoff_to_analysis",
+    reason: "请求属于需求业务，需要交接给完整需求分析链处理。",
+  };
+}
+
+/**
+ * Handoff 分诊节点。
+ *
+ * 分诊结果会以 AIMessage 写入消息状态，供日志、追踪或后续 Agent 查看；
+ * intent 则转换为主图可路由的 analyze、risk_only 或 chat。
+ */
+export async function triageNode(
+  state: RequirementAnalysisStateValue,
+  config: { model: BaseChatModel },
+): Promise<RequirementAnalysisStateUpdate> {
+  const input = getInput(state);
+  let result: TriageResult;
+
+  try {
+    const structured = config.model.withStructuredOutput(triageSchema);
+    result = await structured.invoke([
+      new SystemMessage(TRIAGE_SYSTEM_PROMPT),
+      new HumanMessage(input),
+    ]);
+  } catch (error) {
+    console.warn(
+      "[RequirementAnalysisGraph] triage structured output failed; using keyword fallback",
+      error instanceof Error ? error.message : error,
+    );
+    result = triageByKeywords(input);
+  }
+
+  const intent: RequirementIntent =
+    result.action === "handoff_to_analysis"
+      ? "analyze"
+      : result.action === "handoff_to_risk"
+        ? "risk_only"
+        : "chat";
+  const response =
+    result.action === "answer"
+      ? result.response?.trim() ||
+        "你好！我可以协助你进行需求分析、风险评估和知识库查询。"
+      : undefined;
+  const handoffReason = result.reason?.trim() || "";
+  const triageMessage = new AIMessage(
+    JSON.stringify({
+      action: result.action,
+      response: response ?? result.response ?? "",
+      reason: handoffReason,
+    }),
+  );
+
+  return {
+    messages: [triageMessage],
+    intent,
+    handoffReason,
+    ...(response
+      ? {
+          chatResponse: response,
+          summary: response,
+        }
+      : {}),
+  };
 }
 
 /** 使用 Structured Output 分类；模型或结构化解析失败时自动降级为关键词规则。 */
@@ -597,6 +799,19 @@ async function riskNode(
   });
 
   return { risk, riskResult: risk };
+}
+
+/** Handoff 的风险专项终点：执行风险 Agent，并把结论同步为最终摘要。 */
+async function riskOnlyHandlerNode(
+  state: RequirementAnalysisStateValue,
+): Promise<RequirementAnalysisStateUpdate> {
+  const result = await riskNode(state);
+  const summary = result.riskResult || result.risk || "风险专项分析未能生成结论。";
+
+  return {
+    ...result,
+    summary,
+  };
 }
 
 const SUMMARY_ACTOR_SYSTEM_PROMPT = `你是资深需求分析师。根据分析和风险评估生成综合报告。
@@ -884,13 +1099,32 @@ export function routeByIntent(
   return "extractStep";
 }
 
+/** Handoff 分诊后的主图路由：直接回答结束，其他动作进入对应专业链。 */
+export function routeByTriageIntent(
+  state: RequirementAnalysisStateValue,
+): "extractStep" | "riskOnlyHandler" | typeof END {
+  if (state.intent === "chat") {
+    return END;
+  }
+
+  if (state.intent === "risk_only") {
+    return "riskOnlyHandler";
+  }
+
+  return "extractStep";
+}
+
 /** 创建“分类 → 分支处理”的需求分析图。 */
 export function createAnalysisGraph(model: ChatModel = createChatModel()) {
+  // 第九章 9.2：主图拓扑保持不变，只替换 analysisStep 的内部实现。
+  // 原 createAnalysisSubGraph() 仍保留，可用于第八章 ReAct 版本对比和回归测试。
+  const analysisSupervisorSubGraph = createAnalysisSupervisorSubGraph(model);
+
   return new StateGraph(RequirementAnalysisState)
     .addNode("classifier", createClassifierNode(model))
     .addNode("extractStep", extractNode)
     .addNode("clarifyStep", clarifyNode)
-    .addNode("analysisStep", createAnalysisNode(model))
+    .addNode("analysisStep", analysisSupervisorSubGraph)
     .addNode("riskStep", riskNode)
     .addNode("summaryStep", createSummaryStepNode(model))
     .addNode("queryHandler", createQueryHandlerNode(model))
@@ -903,6 +1137,41 @@ export function createAnalysisGraph(model: ChatModel = createChatModel()) {
     ])
     .addEdge("queryHandler", END)
     .addEdge("chatHandler", END)
+    .addEdge("extractStep", "clarifyStep")
+    .addEdge("clarifyStep", "analysisStep")
+    .addEdge("clarifyStep", "riskStep")
+    .addEdge(["analysisStep", "riskStep"], "summaryStep")
+    .addEdge("summaryStep", END)
+    .compile();
+}
+
+/**
+ * 第九章 9.4 的可选 Handoff 演示图。
+ *
+ * 默认 createAnalysisGraph() 继续使用 classifier，以保留 query 专用分支；
+ * 调用方需要体验 triage 时可改用本工厂。风险专项使用独立终点，避免进入
+ * analysisStep + riskStep 的并行汇聚屏障而等待未启动的 analysisStep。
+ */
+export function createAnalysisGraphWithTriage(
+  model: ChatModel = createChatModel(),
+) {
+  const analysisSupervisorSubGraph = createAnalysisSupervisorSubGraph(model);
+
+  return new StateGraph(RequirementAnalysisState)
+    .addNode("triage", (state) => triageNode(state, { model }))
+    .addNode("extractStep", extractNode)
+    .addNode("clarifyStep", clarifyNode)
+    .addNode("analysisStep", analysisSupervisorSubGraph)
+    .addNode("riskStep", riskNode)
+    .addNode("summaryStep", createSummaryStepNode(model))
+    .addNode("riskOnlyHandler", riskOnlyHandlerNode)
+    .addEdge(START, "triage")
+    .addConditionalEdges("triage", routeByTriageIntent, [
+      "extractStep",
+      "riskOnlyHandler",
+      END,
+    ])
+    .addEdge("riskOnlyHandler", END)
     .addEdge("extractStep", "clarifyStep")
     .addEdge("clarifyStep", "analysisStep")
     .addEdge("clarifyStep", "riskStep")
@@ -946,11 +1215,18 @@ export async function runAnalysisGraph(
   return {
     messages: state.messages,
     intent: state.intent,
+    handoffReason: state.handoffReason,
     extracted: state.extracted,
     clarified: state.clarified,
     analysis: state.analysis,
     risk: state.risk,
     analysisResult: state.analysisResult || state.analysis,
+    activeExperts: state.activeExperts,
+    supervisorReasoning: state.supervisorReasoning,
+    functionalAnalysis: state.functionalAnalysis,
+    performanceAnalysis: state.performanceAnalysis,
+    securityAnalysis: state.securityAnalysis,
+    complianceAnalysis: state.complianceAnalysis,
     riskResult: state.risk,
     summary: state.summary,
     critique: state.critique,
@@ -958,7 +1234,10 @@ export async function runAnalysisGraph(
     queryResponse: state.queryResponse,
     chatResponse: state.chatResponse,
     toolLoopCount: state.toolLoopCount,
-    analysisSubgraphSteps: buildAnalysisSubgraphSteps(state.toolLoopCount),
+    analysisSubgraphSteps:
+      state.intent === "analyze"
+        ? buildAnalysisSubgraphSteps(state.activeExperts)
+        : undefined,
     steps: getExecutedSteps(state.intent),
   };
 }

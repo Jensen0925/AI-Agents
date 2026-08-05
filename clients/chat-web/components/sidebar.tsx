@@ -74,6 +74,7 @@ export function Sidebar({
   const [conversationSearch, setConversationSearch] = useState("")
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
   const [conversationError, setConversationError] = useState("")
+  const [openConversationMenuId, setOpenConversationMenuId] = useState<string | null>(null)
   const [conversationToDelete, setConversationToDelete] = useState<SidebarConversation | null>(null)
   const [conversationToRename, setConversationToRename] = useState<SidebarConversation | null>(null)
   const [renameValue, setRenameValue] = useState("")
@@ -113,6 +114,13 @@ export function Sidebar({
     setRenameError("")
     setRenameValue(conversation.title || "")
     setConversationToRename(conversation)
+  }
+
+  function closeConversationMenuThen(run: () => void) {
+    setOpenConversationMenuId(null)
+    // DropdownMenu 会在当前选择事件结束后恢复焦点。等菜单完全关闭后再打开
+    // Dialog，避免关闭菜单的焦点恢复事件立即把确认框当作“外部点击”而关闭。
+    window.requestAnimationFrame(run)
   }
 
   return (
@@ -241,7 +249,12 @@ export function Sidebar({
                     <span className="truncate">{conversation.title || "新会话"}</span>
                   </button>
                   {(onPinConversation || onRenameConversation || onDeleteConversation) && (
-                    <DropdownMenuPrimitive.Root>
+                    <DropdownMenuPrimitive.Root
+                      open={openConversationMenuId === conversation.id}
+                      onOpenChange={(open) => {
+                        setOpenConversationMenuId(open ? conversation.id : null)
+                      }}
+                    >
                       <DropdownMenuPrimitive.Trigger asChild>
                         <button
                           type="button"
@@ -276,7 +289,10 @@ export function Sidebar({
                           )}
                           {onRenameConversation && (
                             <DropdownMenuPrimitive.Item
-                              onSelect={() => openRenameDialog(conversation)}
+                              onSelect={(event) => {
+                                event.preventDefault()
+                                closeConversationMenuThen(() => openRenameDialog(conversation))
+                              }}
                               className="flex cursor-default select-none items-center gap-2 rounded-md px-2.5 py-2 text-xs outline-none transition-colors data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
                             >
                               <Pencil className="size-3.5" />
@@ -288,10 +304,11 @@ export function Sidebar({
                               <DropdownMenuPrimitive.Separator className="my-1 h-px bg-border" />
                               <DropdownMenuPrimitive.Item
                                 disabled={Boolean(deletingConversationId)}
-                                onSelect={() => {
+                                onSelect={(event) => {
                                   if (deletingConversationId) return
+                                  event.preventDefault()
                                   setConversationError("")
-                                  setConversationToDelete(conversation)
+                                  closeConversationMenuThen(() => setConversationToDelete(conversation))
                                 }}
                                 className="flex cursor-default select-none items-center gap-2 rounded-md px-2.5 py-2 text-xs text-destructive outline-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-50 data-[highlighted]:bg-destructive/10 data-[highlighted]:text-destructive"
                               >
@@ -340,7 +357,6 @@ export function Sidebar({
       </aside>
 
       <DialogPrimitive.Root
-        modal={false}
         open={Boolean(conversationToDelete)}
         onOpenChange={(open) => {
           if (!open && !deletingConversationId) {

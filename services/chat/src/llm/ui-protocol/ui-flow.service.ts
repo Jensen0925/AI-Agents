@@ -205,6 +205,37 @@ function actionError(message: string, response: AIUIResponse): AIUIResponse {
 export class UiFlowService {
   private readonly flowStates = new Map<string, FlowState>();
 
+  /** 判断当前进程内是否已经为指定会话初始化过交互流程。 */
+  hasSession(sessionId: string): boolean {
+    return this.flowStates.has(sessionId);
+  }
+
+  /**
+   * 从持久化的消息元数据恢复交互上下文。
+   *
+   * 状态机本身保持轻量内存实现，但会话切换、浏览器刷新或服务重启后，
+   * Controller 可以用上一条 UI 回复中保存的 flowContext 恢复到正确阶段。
+   * 不可信或过期数据会被忽略，让流程安全回到初始阶段而不是抛出异常。
+   */
+  restoreContext(sessionId: string, value: unknown): boolean {
+    if (!isFlowContext(value)) {
+      return false;
+    }
+
+    this.flowStates.set(sessionId, {
+      context: {
+        sessionStage: value.sessionStage,
+        collectedData: { ...value.collectedData },
+      },
+    });
+    return true;
+  }
+
+  /** 会话删除后释放对应的内存上下文，避免无用状态长期堆积。 */
+  clearSession(sessionId: string): void {
+    this.flowStates.delete(sessionId);
+  }
+
   private getOrCreateState(sessionId: string): FlowState {
     const current = this.flowStates.get(sessionId);
     if (current) {
@@ -369,4 +400,26 @@ export class UiFlowService {
         return resultResponse();
     }
   }
+}
+
+function isFlowContext(value: unknown): value is UIFlowContext {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const context = value as Partial<UIFlowContext>;
+  const validStages: UIFlowStage[] = [
+    "select_type",
+    "fill_detail",
+    "confirm",
+    "result",
+  ];
+
+  return (
+    typeof context.sessionStage === "string" &&
+    validStages.includes(context.sessionStage as UIFlowStage) &&
+    Boolean(context.collectedData) &&
+    typeof context.collectedData === "object" &&
+    !Array.isArray(context.collectedData)
+  );
 }

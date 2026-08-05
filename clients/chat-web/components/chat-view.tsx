@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils"
 import { isDemoSession } from "@/lib/auth"
 import { suggestedQuestions, type ChatMessage } from "@/lib/knowledge-data"
 import { Button } from "@/components/ui/button"
+import { ComponentRenderer } from "@/components/ai-ui/ComponentRenderer"
+import type { AIUIResponse, UIAction, UIResponse } from "@/types/ui-types"
 import { ArrowUp, FileText, Loader2, Sparkles, User } from "lucide-react"
 
 type Conversation = {
@@ -25,6 +27,7 @@ type ApiMessage = {
   role: "USER" | "ASSISTANT" | "user" | "assistant"
   content: string
   createdAt?: string
+  metadata?: unknown
 }
 
 type AnalysisResponse = {
@@ -37,9 +40,19 @@ type AnalysisResponse = {
   retrievedDocuments?: RetrievedDocument[]
 }
 
+/** 正式会话消息可附带服务端持久化的 AI UI 组件。 */
+type RenderableChatMessage = ChatMessage & {
+  components?: UIResponse[]
+}
+
 type ChatViewProps = {
   /** 从侧栏点选的会话 ID；undefined 表示首次进入时自动打开最近会话。 */
   conversationId?: string
+  /**
+   * 会话标题由外层会话列表统一维护。
+   * 传入后可让侧栏的重命名结果立即同步到聊天区标题，无需重新请求历史消息。
+   */
+  conversationTitle?: string
   newConversationSignal?: number
   onConversationsChange?: Dispatch<SetStateAction<Conversation[]>>
   onActiveConversationChange?: (id: string | null) => void
@@ -77,12 +90,44 @@ function formatAssistantReply(response: AnalysisResponse): string {
   return "分析已完成，但没有生成可展示的报告。"
 }
 
-function toChatMessage(message: ApiMessage): ChatMessage {
+function toChatMessage(message: ApiMessage): RenderableChatMessage {
   return {
     id: message.id,
     role: message.role === "USER" || message.role === "user" ? "user" : "assistant",
     content: typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+    components: uiComponentsFromMetadata(message.metadata),
   }
+}
+
+/**
+ * UI 组件随 ASSISTANT 消息 metadata 一起由 Nest 返回。
+ * 只读取已知字段；旧消息或普通聊天消息会自然退化为纯文本渲染。
+ */
+function uiComponentsFromMetadata(metadata: unknown): UIResponse[] | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined
+  }
+  const ui = (metadata as { ui?: unknown }).ui
+  if (!ui || typeof ui !== "object" || Array.isArray(ui)) {
+    return undefined
+  }
+  const components = (ui as { components?: unknown }).components
+  return Array.isArray(components) ? (components as UIResponse[]) : undefined
+}
+
+/** 需要确定性交互时才启用 UI Flow；其它输入保持现有知识库聊天体验。 */
+function shouldUseUiFlow(input: string): boolean {
+  return /我要提一个新需求|提一个新需求|查看需求\s*REQ-[A-Za-z0-9-]+|提交需求分析/.test(input)
+}
+
+function uiResponseText(response: AIUIResponse): string {
+  if (response.message?.trim()) return response.message.trim()
+  const text = response.components
+    .filter((component) => component.type === "text")
+    .map((component) => component.content.trim())
+    .filter(Boolean)
+    .join("\n\n")
+  return text || "请根据下方内容继续操作。"
 }
 
 function responseArray<T>(value: unknown): T[] {
@@ -96,11 +141,12 @@ function responseArray<T>(value: unknown): T[] {
 
 export function ChatView({
   conversationId,
+  conversationTitle,
   newConversationSignal = 0,
   onConversationsChange,
   onActiveConversationChange,
 }: ChatViewProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<RenderableChatMessage[]>([])
   const [input, setInput] = useState("")
   const [thinking, setThinking] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -242,7 +288,7 @@ export function ChatView({
     const activeConversation = await ensureConversation()
     if (!activeConversation) return
     const epoch = conversationEpochRef.current
-    const userMessage: ChatMessage = {
+    const userMessage: RenderableChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content,
@@ -252,12 +298,22 @@ export function ChatView({
     setError("")
     setThinking(true)
     try {
-      const { data } = await api.post<AnalysisResponse>(
-        `/conversations/${activeConversation.id}/chat`,
-        { input: content },
-        // 多 Agent 分析可能需要多次模型调用，不能沿用初始化接口的短超时。
-        { timeout: 120_000 },
-      )
+      const data = shouldUseUiFlow(content)
+        ? (
+            await api.post<AIUIResponse>(
+              `/conversations/${activeConversation.id}/ui-chat`,
+              { input: content },
+              { timeout: 120_000 },
+            )
+          ).data
+        : (
+            await api.post<AnalysisResponse>(
+              `/conversations/${activeConversation.id}/chat`,
+              { input: content },
+              // 多 Agent 分析可能需要多次模型调用，不能沿用初始化接口的短超时。
+              { timeout: 120_000 },
+            )
+          ).data
       // 如果用户在模型调用期间切换了会话，丢弃旧会话的响应，
       // 让它只保存在后端原会话中，不得污染当前页面。
       if (conversationEpochRef.current !== epoch) return
@@ -266,12 +322,16 @@ export function ChatView({
         {
           id: `assistant-${Date.now()}`,
           role: "assistant",
-          content: formatAssistantReply(data),
-          citations: data.retrievedDocuments?.map((document, index) => ({
-            docId: `source-${index}`,
-            title: `知识库片段 ${index + 1}`,
-            snippet: document.content,
-          })),
+          content: "components" in data ? uiResponseText(data) : formatAssistantReply(data),
+          ...( "components" in data
+            ? { components: data.components }
+            : {
+                citations: data.retrievedDocuments?.map((document, index) => ({
+                  docId: `source-${index}`,
+                  title: `知识库片段 ${index + 1}`,
+                  snippet: document.content,
+                })),
+              }),
         },
       ])
       setConversation((current) =>
@@ -282,6 +342,36 @@ export function ChatView({
         const updated = { ...activeConversation, title: updatedTitle }
         return [updated, ...current.filter((item) => item.id !== updated.id)]
       })
+    } catch (reason) {
+      if (conversationEpochRef.current === epoch) setError(apiErrorMessage(reason))
+    } finally {
+      if (conversationEpochRef.current === epoch) setThinking(false)
+    }
+  }
+
+  /** 由 ComponentRenderer 回传 UIAction，并由会话级 API 推进持久化状态机。 */
+  async function handleUiAction(action: UIAction) {
+    if (!conversation || thinking) return
+    const activeConversation = conversation
+    const epoch = conversationEpochRef.current
+    setError("")
+    setThinking(true)
+    try {
+      const { data } = await api.post<AIUIResponse>(
+        `/conversations/${activeConversation.id}/ui-action`,
+        { action },
+        { timeout: 30_000 },
+      )
+      if (conversationEpochRef.current !== epoch) return
+      setMessages((current) => [
+        ...current,
+        {
+          id: `assistant-ui-${Date.now()}`,
+          role: "assistant",
+          content: uiResponseText(data),
+          components: data.components,
+        },
+      ])
     } catch (reason) {
       if (conversationEpochRef.current === epoch) setError(apiErrorMessage(reason))
     } finally {
@@ -304,7 +394,9 @@ export function ChatView({
           <Sparkles className="size-5" />
         </div>
         <div className="min-w-0">
-          <h1 className="truncate text-base font-semibold text-foreground">{conversation?.title || "AI 对话"}</h1>
+          <h1 className="truncate text-base font-semibold text-foreground">
+            {conversationTitle || conversation?.title || "AI 对话"}
+          </h1>
           <p className="text-xs text-muted-foreground">基于你的知识库回答，并标注来源</p>
         </div>
       </header>
@@ -315,7 +407,7 @@ export function ChatView({
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-8">
             {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
+              <MessageBubble key={message.id} message={message} onAction={handleUiAction} />
             ))}
             {!hasMessages && !thinking && (
               <div className="flex min-h-[min(58vh,520px)] flex-col items-center justify-center gap-5 py-10 text-center">
@@ -370,7 +462,13 @@ export function ChatView({
   )
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message,
+  onAction,
+}: {
+  message: RenderableChatMessage
+  onAction: (action: UIAction) => void
+}) {
   const isUser = message.role === "user"
   return (
     <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
@@ -381,6 +479,18 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         <div className={cn("whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed", isUser ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground")}>
           {message.content}
         </div>
+        {!isUser && message.components && message.components.length > 0 && (
+          <div className="w-full space-y-3">
+            {message.components.map((component, index) => (
+              <ComponentRenderer
+                key={`${message.id}-component-${index}`}
+                component={component}
+                onAction={onAction}
+                className="max-w-full"
+              />
+            ))}
+          </div>
+        )}
         {message.citations && message.citations.length > 0 && (
           <div className="flex flex-col gap-2">
             <span className="text-xs font-medium text-muted-foreground">引用来源</span>

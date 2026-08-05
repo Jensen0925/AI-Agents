@@ -1,4 +1,4 @@
-import { AIMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { beforeEach, describe, expect, it, mock } from "bun:test";
 
 const RETRIEVED_CONTEXT = "当前用户知识库没有检索到相关文档。";
@@ -41,15 +41,59 @@ function mockIntent(input: string): "analyze" | "query" | "chat" {
   return "analyze";
 }
 
+function mockTriage(input: string) {
+  if (/^(你好|您好|嗨)|天气不错/i.test(input)) {
+    return {
+      action: "answer" as const,
+      response: "你好，我是需求分析助手。",
+    };
+  }
+
+  if (/(风险|安全|认证|权限|合规|冲突|隐私)/i.test(input)) {
+    return {
+      action: "handoff_to_risk" as const,
+      reason: "需要风险专家专项处理",
+    };
+  }
+
+  return {
+    action: "handoff_to_analysis" as const,
+    reason: "需要完整需求分析",
+  };
+}
+
 const fakeModel = {
   withStructuredOutput: () => ({
     invoke: async (messages: MessageLike[]) => {
+      const system = messages[0]?.content;
+      const input = messageInput(messages);
+
+      if (
+        typeof system === "string" &&
+        system.includes("多专家团队的 Supervisor")
+      ) {
+        invocationOrder.push("supervisor");
+        return {
+          activeExperts: /登录|认证|权限/i.test(input)
+            ? ["functional", "security"]
+            : ["functional"],
+          reasoning: "mock supervisor",
+        };
+      }
+
+      if (
+        typeof system === "string" &&
+        system.includes("Handoff 分诊协调员")
+      ) {
+        invocationOrder.push("triage");
+        return mockTriage(input);
+      }
+
       invocationOrder.push("classifier");
       if (classifierShouldFail) {
         throw new Error("classifier unavailable");
       }
 
-      const input = messageInput(messages);
       return { intent: mockIntent(input), reasoning: "mock classifier" };
     },
   }),
@@ -60,6 +104,27 @@ const fakeModel = {
     if (system === "你是需求查询助手") {
       invocationOrder.push("queryHandler");
       return new AIMessage(`需求查询结果：${input}`);
+    }
+
+    if (
+      typeof system === "string" &&
+      system.includes("功能需求专家")
+    ) {
+      invocationOrder.push("functionalExpert");
+      return new AIMessage("功能专家结论");
+    }
+
+    if (typeof system === "string" && system.includes("安全专家")) {
+      invocationOrder.push("securityExpert");
+      return new AIMessage("安全专家结论");
+    }
+
+    if (
+      typeof system === "string" &&
+      system.includes("汇总负责人")
+    ) {
+      invocationOrder.push("aggregator");
+      return new AIMessage("需求分析结果");
     }
 
     invocationOrder.push("chatHandler");
@@ -100,7 +165,11 @@ mock.module("../src/llm/agents/sub-agents", () => ({
   summaryAgent: { invoke: summaryInvoke },
 }));
 
-const { classifyIntentByKeywords, runAnalysisGraph } = require(
+const {
+  classifyIntentByKeywords,
+  createAnalysisGraphWithTriage,
+  runAnalysisGraph,
+} = require(
   "../src/llm/graph/requirement-analysis-graph"
 ) as typeof import("../src/llm/graph/requirement-analysis-graph");
 const { runRequirementAnalysis } = require(
@@ -162,13 +231,24 @@ describe("requirement analysis graph", () => {
       "extract",
       "clarify",
     ]);
-    expect(new Set(invocationOrder.slice(3, 5))).toEqual(
-      new Set(["analysis", "risk"]),
-    );
+    expect(invocationOrder).toContain("supervisor");
+    expect(invocationOrder).toContain("functionalExpert");
+    expect(invocationOrder).toContain("securityExpert");
+    expect(invocationOrder).toContain("aggregator");
+    expect(invocationOrder).toContain("risk");
     expect(invocationOrder.at(-1)).toBe("summary");
     expect(result.extracted).toBe(EXTRACTED);
     expect(result.clarified).toBe(CLARIFIED);
     expect(result.analysisResult).toBe("需求分析结果");
+    expect(result.activeExperts).toEqual(["functional", "security"]);
+    expect(result.functionalAnalysis).toBe("功能专家结论");
+    expect(result.securityAnalysis).toBe("安全专家结论");
+    expect(result.analysisSubgraphSteps).toEqual([
+      "analysisSupervisor",
+      "functionalExpert",
+      "securityExpert",
+      "analysisAggregator",
+    ]);
     expect(result.riskResult).toBe("风险评估结果");
     expect(result.summary).toBe(legacySummary);
     expect(result.steps).toEqual([
@@ -221,10 +301,54 @@ describe("requirement analysis graph", () => {
     );
   });
 
+  it("supports answer, analysis handoff and risk-only handoff", async () => {
+    const graph = createAnalysisGraphWithTriage();
+
+    const chatResult = await graph.invoke({
+      messages: [new HumanMessage("你好")],
+      input: "你好",
+      retrievedContext: RETRIEVED_CONTEXT,
+    });
+    expect(chatResult.intent).toBe("chat");
+    expect(chatResult.chatResponse).toBe("你好，我是需求分析助手。");
+    expect(chatResult.summary).toBe(chatResult.chatResponse);
+
+    invocationOrder.length = 0;
+    const riskResult = await graph.invoke({
+      messages: [
+        new HumanMessage("只检查用户登录功能的安全风险"),
+      ],
+      input: "只检查用户登录功能的安全风险",
+      retrievedContext: RETRIEVED_CONTEXT,
+    });
+    expect(riskResult.intent).toBe("risk_only");
+    expect(riskResult.handoffReason).toBe("需要风险专家专项处理");
+    expect(riskResult.riskResult).toBe("风险评估结果");
+    expect(riskResult.summary).toBe("风险评估结果");
+    expect(invocationOrder).toEqual(["triage", "risk"]);
+
+    invocationOrder.length = 0;
+    const analysisResult = await graph.invoke({
+      messages: [
+        new HumanMessage("开发一个在线问卷系统"),
+      ],
+      input: "开发一个在线问卷系统",
+      retrievedContext: RETRIEVED_CONTEXT,
+    });
+    expect(analysisResult.intent).toBe("analyze");
+    expect(analysisResult.handoffReason).toBe("需要完整需求分析");
+    expect(analysisResult.summary).toBe("最终需求分析报告");
+    expect(invocationOrder.slice(0, 3)).toEqual([
+      "triage",
+      "extract",
+      "clarify",
+    ]);
+  });
+
   it("classifies at least six of the seven acceptance inputs correctly", async () => {
     const cases: Array<{
       input: string;
-      expected: Array<"analyze" | "query" | "chat">;
+      expected: Array<"analyze" | "query" | "chat" | "risk_only">;
     }> = [
       {
         input:

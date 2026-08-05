@@ -49,7 +49,7 @@ const runAnalysisGraph = mock(async (_input: string, _context?: string) => ({
   ],
 }));
 
-mock.module("../src/llm/graph/requirement-analysis-graph", () => ({
+mock.module("../src/llm/graph/analysis-graph.runner", () => ({
   runAnalysisGraph,
 }));
 
@@ -279,7 +279,7 @@ describe("AdvancedAnalysisService", () => {
     );
   });
 
-  it("returns a displayable manual-review message when both analysis paths fail", async () => {
+  it("returns a displayable local report when both model paths fail", async () => {
     runAnalysisGraph.mockImplementation(async () => {
       throw new Error("graph unavailable");
     });
@@ -315,9 +315,9 @@ describe("AdvancedAnalysisService", () => {
 
     expect(result.status).toBe("failed");
     expect(result.fallback).toBe("manual_review");
-    const fallbackMessage = "需求分析未能完成，任务已转入人工审核。";
-    expect(result.report).toBe(fallbackMessage);
-    expect(result.summary).toBe(fallbackMessage);
-    expect(addMessage.mock.calls[1]?.[2]).toBe(fallbackMessage);
+    expect(result.report).toContain("## 需求摘要");
+    expect(result.report).toContain("## 功能分解");
+    expect(result.summary).toContain("## 技术复杂度");
+    expect(addMessage.mock.calls[1]?.[2]).toContain("## 开发排期");
   });
 });
