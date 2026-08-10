@@ -3,6 +3,7 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "bun:test";
 import {
   createAnalysisSupervisorSubGraph,
+  createFunctionalExpert,
   routeToExperts,
 } from "../src/llm/graph/experts";
 
@@ -94,5 +95,51 @@ describe("analysis supervisor subgraph", () => {
     } as Parameters<typeof routeToExperts>[0]);
 
     expect(routes).toEqual(["performanceExpert", "complianceExpert"]);
+  });
+
+  it("degrades one unavailable expert without aborting its subgraph", async () => {
+    const unavailableModel = {
+      invoke: async () => {
+        throw new Error("mock model unavailable");
+      },
+    } as unknown as BaseChatModel;
+    const graph = createFunctionalExpert(unavailableModel);
+
+    const result = await graph.invoke({
+      input: "开发一个用户登录功能",
+      messages: [new HumanMessage("开发一个用户登录功能")],
+    });
+
+    expect(result.functionalAnalysis).toContain("[功能 专家暂不可用：mock model unavailable]");
+    expect(result.functionalAnalysis).toContain("建议人工补充");
+  });
+
+  it("keeps the degradation marker available to the aggregator", async () => {
+    const model = {
+      withStructuredOutput: () => ({
+        invoke: async () => ({
+          activeExperts: ["functional"],
+          reasoning: "测试专家降级汇总",
+        }),
+      }),
+      invoke: async (messages: MessageLike[]) => {
+        const system = textOf(messages[0]?.content);
+        if (system.includes("功能需求专家")) {
+          throw new Error("functional mock failure");
+        }
+        if (system.includes("汇总负责人")) {
+          return new AIMessage("汇总报告已保留人工补充标记。");
+        }
+        throw new Error(`Unexpected model call: ${system}`);
+      },
+    } as unknown as BaseChatModel;
+    const graph = createAnalysisSupervisorSubGraph(model);
+    const result = await graph.invoke({
+      input: "开发用户登录功能",
+      messages: [new HumanMessage("开发用户登录功能")],
+    });
+
+    expect(result.functionalAnalysis).toContain("专家暂不可用");
+    expect(result.analysisResult).toContain("人工补充标记");
   });
 });

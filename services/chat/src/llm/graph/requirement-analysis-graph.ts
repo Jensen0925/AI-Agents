@@ -14,6 +14,7 @@ import {
   StateGraph,
 } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
+import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import { z } from "zod";
 import {
   analysisAgent,
@@ -227,7 +228,48 @@ export const RequirementAnalysisState = Annotation.Root({
 export type RequirementAnalysisStateValue =
   typeof RequirementAnalysisState.State;
 type RequirementAnalysisStateUpdate = Partial<RequirementAnalysisStateValue>;
-type ChatModel = ReturnType<typeof createChatModel>;
+/** 统一使用 LangChain 抽象模型，便于注入测试模型和不同供应商实现。 */
+type ChatModel = BaseChatModel;
+
+/** 运行图时的可选持久化配置；省略时保持原先的无状态行为。 */
+export interface AnalysisGraphOptions {
+  checkpointer?: BaseCheckpointSaver;
+}
+
+/** LangGraph 持久化线程的统一命名，避免用户和会话之间发生状态串扰。 */
+export function createAnalysisThreadId(userId: string, sessionId: string): string {
+  return `user-${userId}:session-${sessionId}`;
+}
+
+type PostgresSaverLike = BaseCheckpointSaver & { setup(): Promise<void> };
+
+/**
+ * 创建并初始化 PostgreSQL checkpointer。
+ *
+ * 依赖以动态加载方式接入：未配置 DATABASE_URL 或尚未安装可选包时，调用方
+ * 可继续使用无持久化图；生产环境安装依赖后即可共享第五章 PostgreSQL。
+ */
+export async function createPostgresCheckpointer(): Promise<PostgresSaverLike | undefined> {
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  if (!databaseUrl) return undefined;
+
+  try {
+    const moduleName = "@langchain/langgraph-checkpoint-postgres";
+    const checkpointModule = (await import(moduleName)) as {
+      PostgresSaver?: { fromConnString(url: string): PostgresSaverLike };
+    };
+    const checkpointer = checkpointModule.PostgresSaver?.fromConnString(databaseUrl);
+    if (!checkpointer) throw new Error("PostgresSaver export is unavailable");
+    await checkpointer.setup();
+    return checkpointer;
+  } catch (error) {
+    console.warn(
+      "[LangGraph] PostgreSQL checkpoint 未启用，继续使用无持久化图：",
+      error instanceof Error ? error.message : error,
+    );
+    return undefined;
+  }
+}
 
 /** 图的稳定对外输出；保留 analysis/risk，同时提供新的 Result 字段别名。 */
 export interface RunAnalysisGraphOutput {
@@ -1115,7 +1157,10 @@ export function routeByTriageIntent(
 }
 
 /** 创建“分类 → 分支处理”的需求分析图。 */
-export function createAnalysisGraph(model: ChatModel = createChatModel()) {
+export function createAnalysisGraph(
+  model: BaseChatModel = createChatModel(),
+  options: AnalysisGraphOptions = {},
+) {
   // 第九章 9.2：主图拓扑保持不变，只替换 analysisStep 的内部实现。
   // 原 createAnalysisSubGraph() 仍保留，可用于第八章 ReAct 版本对比和回归测试。
   const analysisSupervisorSubGraph = createAnalysisSupervisorSubGraph(model);
@@ -1142,7 +1187,15 @@ export function createAnalysisGraph(model: ChatModel = createChatModel()) {
     .addEdge("clarifyStep", "riskStep")
     .addEdge(["analysisStep", "riskStep"], "summaryStep")
     .addEdge("summaryStep", END)
-    .compile();
+    .compile(options.checkpointer ? { checkpointer: options.checkpointer } : undefined);
+}
+
+/** 创建已连接 PostgreSQL checkpoint 的需求分析图。 */
+export async function createPersistentAnalysisGraph(
+  model: BaseChatModel = createChatModel(),
+) {
+  const checkpointer = await createPostgresCheckpointer();
+  return createAnalysisGraph(model, { checkpointer });
 }
 
 /**
@@ -1153,7 +1206,7 @@ export function createAnalysisGraph(model: ChatModel = createChatModel()) {
  * analysisStep + riskStep 的并行汇聚屏障而等待未启动的 analysisStep。
  */
 export function createAnalysisGraphWithTriage(
-  model: ChatModel = createChatModel(),
+  model: BaseChatModel = createChatModel(),
 ) {
   const analysisSupervisorSubGraph = createAnalysisSupervisorSubGraph(model);
 
@@ -1204,13 +1257,30 @@ function getExecutedSteps(intent: RequirementIntent): AnalysisGraphStep[] {
 export async function runAnalysisGraph(
   input: string,
   retrievedContext = DEFAULT_RETRIEVED_CONTEXT,
+  options: {
+    model?: BaseChatModel;
+    userId?: string;
+    sessionId?: string;
+    checkpointer?: BaseCheckpointSaver;
+  } = {},
 ): Promise<RunAnalysisGraphOutput> {
-  const graph = createAnalysisGraph();
+  const checkpointer =
+    options.checkpointer ??
+    (options.userId && options.sessionId
+      ? await createPostgresCheckpointer()
+      : undefined);
+  const graph = createAnalysisGraph(options.model ?? createChatModel(), {
+    checkpointer,
+  });
+  const threadId =
+    options.userId && options.sessionId
+      ? createAnalysisThreadId(options.userId, options.sessionId)
+      : undefined;
   const state = await graph.invoke({
     messages: [new HumanMessage(input)],
     input,
     retrievedContext,
-  });
+  }, threadId ? { configurable: { thread_id: threadId } } : undefined);
 
   return {
     messages: state.messages,

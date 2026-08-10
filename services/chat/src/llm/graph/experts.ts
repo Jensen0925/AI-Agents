@@ -48,7 +48,10 @@ export const EXPERT_NODE_BY_NAME = {
 export type ExpertNodeName =
   (typeof EXPERT_NODE_BY_NAME)[keyof typeof EXPERT_NODE_BY_NAME];
 
-const MAX_EXPERT_TOOL_LOOPS = 4;
+/** 专家工具调用硬上限，避免模型在 ReAct 回边中无限消耗 token。 */
+export const MAX_EXPERT_STEPS = 6;
+/** 兼容旧调用方的别名。 */
+export const MAX_EXPERT_TOOL_LOOPS = MAX_EXPERT_STEPS;
 const DEFAULT_RETRIEVED_CONTEXT = "当前知识库没有检索到相关资料。";
 
 /**
@@ -273,6 +276,7 @@ const supervisorDecisionSchema = z.object({
   activeExperts: z
     .array(z.enum(EXPERT_NAMES))
     .min(1)
+    .max(4)
     .describe("本次需要并行执行的专家列表"),
   reasoning: z.string().describe("选择这些专家的简短依据"),
 });
@@ -457,6 +461,7 @@ export function createExpertSubGraph(
   tools: StructuredToolInterface[],
   systemPrompt: string,
   outputField: ExpertOutputField,
+  opts: { name: string } = { name: outputField },
 ): CompiledStateGraph<any, any, any> {
   const toolNode = new ToolNode(tools);
 
@@ -469,20 +474,25 @@ export function createExpertSubGraph(
       ...state.messages,
     ];
 
-    let response: BaseMessage;
-    if (state.expertToolLoopCount >= MAX_EXPERT_TOOL_LOOPS || !model.bindTools) {
-      response = (await model.invoke([
-        new SystemMessage(
-          `${systemPrompt}\n\n当前必须直接给出最终专家结论，不再调用任何工具。`,
-        ),
-        new HumanMessage(createExpertContext(state)),
-        ...state.messages,
-      ])) as BaseMessage;
-    } else {
-      response = (await model.bindTools(tools).invoke(messages)) as BaseMessage;
+    try {
+      let response: BaseMessage;
+      if (state.expertToolLoopCount >= MAX_EXPERT_STEPS || !model.bindTools) {
+        response = (await model.invoke([
+          new SystemMessage(
+            `${systemPrompt}\n\n当前必须直接给出最终专家结论，不再调用任何工具。`,
+          ),
+          new HumanMessage(createExpertContext(state)),
+          ...state.messages,
+        ])) as BaseMessage;
+      } else {
+        response = (await model.bindTools(tools).invoke(messages)) as BaseMessage;
+      }
+      return { messages: [response] };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const fallback = `[${opts.name} 专家暂不可用：${reason}] 本项分析已跳过，建议人工补充。`;
+      return { messages: [new AIMessage(fallback)], [outputField]: fallback } as Partial<ExpertSubGraphStateValue>;
     }
-
-    return { messages: [response] };
   };
 
   const toolsNode = async (
@@ -501,7 +511,7 @@ export function createExpertSubGraph(
     const lastMessage = state.messages.at(-1);
     if (
       hasToolCalls(lastMessage) &&
-      state.expertToolLoopCount < MAX_EXPERT_TOOL_LOOPS
+      state.expertToolLoopCount < MAX_EXPERT_STEPS
     ) {
       return "tools";
     }
@@ -515,10 +525,13 @@ export function createExpertSubGraph(
       .reverse()
       .find((message) => message.type === "ai");
     const content = lastAiMessage ? getMessageText(lastAiMessage).trim() : "";
+    const existingOutput = state[outputField];
 
     return {
       [outputField]:
-        content ||
+        existingOutput?.includes("专家暂不可用")
+          ? existingOutput
+          : content ||
         "专家暂未生成有效结论，请将该维度标记为待人工复核。",
     } as Partial<ExpertSubGraphStateValue>;
   };
@@ -542,6 +555,7 @@ export function createFunctionalExpert(model: BaseChatModel) {
     FUNCTIONAL_EXPERT_TOOLS,
     FUNCTIONAL_EXPERT_SYSTEM_PROMPT,
     "functionalAnalysis",
+    { name: "功能" },
   );
 }
 
@@ -551,6 +565,7 @@ export function createPerformanceExpert(model: BaseChatModel) {
     PERFORMANCE_EXPERT_TOOLS,
     PERFORMANCE_EXPERT_SYSTEM_PROMPT,
     "performanceAnalysis",
+    { name: "性能与可靠性" },
   );
 }
 
@@ -560,6 +575,7 @@ export function createSecurityExpert(model: BaseChatModel) {
     SECURITY_EXPERT_TOOLS,
     SECURITY_EXPERT_SYSTEM_PROMPT,
     "securityAnalysis",
+    { name: "安全" },
   );
 }
 
@@ -569,6 +585,7 @@ export function createComplianceExpert(model: BaseChatModel) {
     COMPLIANCE_EXPERT_TOOLS,
     COMPLIANCE_EXPERT_SYSTEM_PROMPT,
     "complianceAnalysis",
+    { name: "合规与治理" },
   );
 }
 

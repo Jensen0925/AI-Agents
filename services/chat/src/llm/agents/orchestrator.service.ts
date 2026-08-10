@@ -6,6 +6,8 @@ import {
   riskAgent,
   summaryAgent,
 } from "./sub-agents";
+import type { AIUIResponse, UIStep } from "../ui-protocol/ui-types";
+import type { ExpertName } from "../graph/experts";
 
 export type RequirementAgentName =
   | "extractAgent"
@@ -29,6 +31,10 @@ export interface OrchestrationResult {
   fallback: "manual_review" | null;
   steps: OrchestrationStep[];
   report: string | null;
+  /** Supervisor 实际调度的专项专家（可选，兼容固定编排调用方）。 */
+  activeExperts?: ExpertName[];
+  /** 流程因澄清或人工介入暂停时置为 true。 */
+  interrupted?: boolean;
 }
 
 interface ClarificationDecision {
@@ -94,6 +100,64 @@ function errorMessage(error: unknown): string {
  */
 @Injectable()
 export class OrchestratorService {
+  /** 将编排结果转换为前端可直接渲染的 UI 协议。 */
+  toUIResponse(result: OrchestrationResult): AIUIResponse {
+    const components: AIUIResponse["components"] = [];
+    if (result.interrupted || result.status === "clarification_required") {
+      components.push({
+        type: "confirmation",
+        id: "human-review-confirmation",
+        title: "需要确认后继续",
+        summary:
+          result.clarificationQuestions.length > 0
+            ? result.clarificationQuestions
+            : "分析流程已暂停，请确认是否交由人工补充。",
+        confirmLabel: "继续分析",
+        cancelLabel: "转人工审核",
+        confirmAction: "resume_analysis",
+        cancelAction: "manual_review",
+      });
+    }
+
+    const experts = [...new Set(result.activeExperts ?? [])].slice(0, 4);
+    const expertSteps: UIStep[] = experts.map((expert, index) => ({
+      key: `${expert}_expert`,
+      label: `${expert}_expert`,
+      status:
+        result.status === "completed"
+          ? "completed"
+          : index === 0
+            ? "current"
+            : "pending",
+    }));
+    if (expertSteps.length > 0) {
+      components.push({
+        type: "steps",
+        id: "analysis-experts",
+        title: "专家分析进度",
+        current: Math.max(
+          0,
+          expertSteps.findIndex((step) => step.status === "current"),
+        ),
+        steps: expertSteps,
+      });
+    }
+
+    if (result.report) {
+      components.push({ type: "text", content: result.report, markdown: true });
+    }
+    if (components.length === 0) {
+      components.push({
+        type: "text",
+        content:
+          result.fallback === "manual_review"
+            ? "分析暂时不可用，已转人工审核。"
+            : "暂无可展示结果。",
+      });
+    }
+    return { components };
+  }
+
   /** 执行“抽取 → 澄清 → 并行分析/风控 → 汇总”的固定工作流。 */
   async orchestrate(
     input: string,

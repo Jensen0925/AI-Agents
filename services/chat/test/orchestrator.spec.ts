@@ -126,6 +126,29 @@ describe("OrchestratorService", () => {
     });
     expect(summaryInvoke).not.toHaveBeenCalled();
   });
+
+  it("converts interrupted multi-expert output into compatible UI components", () => {
+    const response = new OrchestratorService().toUIResponse({
+      mode: "fixed",
+      status: "clarification_required",
+      clarificationQuestions: ["请补充目标用户。"],
+      usedAgents: ["extractAgent", "clarifyAgent"],
+      fallback: null,
+      steps: [],
+      report: null,
+      interrupted: true,
+      activeExperts: ["functional", "security"],
+    });
+
+    expect(response.components[0]).toMatchObject({ type: "confirmation" });
+    expect(response.components[1]).toMatchObject({
+      type: "steps",
+      steps: [
+        { key: "functional_expert" },
+        { key: "security_expert" },
+      ],
+    });
+  });
 });
 
 describe("AdvancedAnalysisService", () => {
