@@ -33,21 +33,21 @@ describe("chapter 10 token economics estimator", () => {
     expect(estimateTextTokens("abcde")).toBe(2);
   });
 
-  it("falls back to gpt-4o-mini for unknown models", () => {
-    expect(getModelPricing("unknown-model")).toEqual(getModelPricing("gpt-4o-mini"));
+  it("falls back to gpt-5.6-luna for unknown models", () => {
+    expect(getModelPricing("unknown-model")).toEqual(getModelPricing("gpt-5.6-luna"));
   });
 
   it("charges tool schemas as part of input context", () => {
     const base = estimateGraphNodeCost({
       nodeName: "analysis",
-      modelName: "gpt-4o-mini",
+      modelName: "gpt-5.6-luna",
       systemPrompt: "分析需求",
       messages: ["开发登录功能"],
       outputText: "分析结果",
     });
     const withTools = estimateGraphNodeCost({
       nodeName: "analysis",
-      modelName: "gpt-4o-mini",
+      modelName: "gpt-5.6-luna",
       systemPrompt: "分析需求",
       toolSchemas: { name: "search_requirement", schema: { reqId: "string" } },
       messages: ["开发登录功能"],
@@ -60,11 +60,11 @@ describe("chapter 10 token economics estimator", () => {
   it("uses output pricing for generated output tokens", () => {
     const estimate = estimateGraphNodeCost({
       nodeName: "summary",
-      modelName: "gpt-4o-mini",
+      modelName: "gpt-5.6-luna",
       systemPrompt: "",
       outputText: "abcdefgh",
     });
-    const expected = (2 * getModelPricing("gpt-4o-mini").output) / 1_000_000;
+    const expected = (2 * getModelPricing("gpt-5.6-luna").output) / 1_000_000;
     expect(estimate.outputTokens).toBe(2);
     expect(estimate.estimatedCostUsd).toBe(expected);
   });
@@ -130,10 +130,10 @@ describe("10.9.1 AgentModelSet", () => {
       .toBe("demo-deepseek-chat");
   });
 
-  it("assigns all five high-risk roles to demo-gpt-4o by default", () => {
+  it("assigns all five high-risk roles to demo-gpt-5.6-terra by default", () => {
     expect(HIGH_RISK_AGENTS).toHaveLength(5);
     for (const agentName of HIGH_RISK_AGENTS) {
-      expect(resolveModelForAgent({ agentName }).selectedModelConfigId).toBe("demo-gpt-4o");
+      expect(resolveModelForAgent({ agentName }).selectedModelConfigId).toBe("demo-gpt-5.6-terra");
     }
   });
 
@@ -147,7 +147,7 @@ describe("10.9.1 AgentModelSet", () => {
 describe("10.9.2 runtime model overrides", () => {
   it("keeps the default model below the budget warning threshold", () => {
     const result = resolveModelForAgent({ agentName: "functional_expert", budgetStatus: { usedPercent: 79 } });
-    expect(result.selectedModelConfigId).toBe("demo-gpt-4o-mini");
+    expect(result.selectedModelConfigId).toBe("demo-gpt-5.6-luna");
     expect(result.overrideReason).toBeNull();
   });
 
@@ -156,13 +156,13 @@ describe("10.9.2 runtime model overrides", () => {
     const security = resolveModelForAgent({ agentName: "security_expert", budgetStatus: { usedPercent: 90 } });
     expect(functional.selectedModelConfigId).toBe("demo-deepseek-chat");
     expect(functional.overrideReason).toContain("budget_tight_downgrade");
-    expect(security.selectedModelConfigId).toBe("demo-gpt-4o");
+    expect(security.selectedModelConfigId).toBe("demo-gpt-5.6-terra");
     expect(security.overrideReason).toBeNull();
   });
 
   it("rejects non-compressor agents after budget exhaustion", () => {
     const result = resolveModelForAgent({ agentName: "risk_agent", budgetStatus: { usedPercent: 110 } });
-    expect(result.selectedModelConfigId).toBe("demo-gpt-4o-mini");
+    expect(result.selectedModelConfigId).toBe("demo-gpt-5.6-luna");
     expect(result.overrideReason).toBe("budget_exceeded_reject");
   });
 
@@ -211,8 +211,8 @@ describe("10.8.2 TokenUsageService", () => {
       graphName: "requirement-analysis",
       nodeName: "functional",
       agentName: "functional_expert",
-      modelConfigId: "demo-gpt-4o-mini",
-      modelName: "gpt-4o-mini",
+      modelConfigId: "demo-gpt-5.6-luna",
+      modelName: "gpt-5.6-luna",
       inputTokens: 100,
       outputTokens: 20,
       cachedInputTokens: 10,
@@ -288,7 +288,7 @@ describe("10.8.2 TokenUsageService", () => {
         graphName: "graph",
         nodeName: "node",
         agentName: "agent",
-        modelName: "gpt-4o-mini",
+        modelName: "gpt-5.6-luna",
       }),
     ).resolves.toBeUndefined();
   });
@@ -310,7 +310,7 @@ describe("10.8.3 withTokenUsage", () => {
     };
     expect(
       await withTokenUsage(
-        { graphName: "graph", nodeName: "summary", agentName: "summary_agent", modelName: "gpt-4o-mini" },
+        { graphName: "graph", nodeName: "summary", agentName: "summary_agent", modelName: "gpt-5.6-luna" },
         { recordUsage } as never,
         async () => response,
       ),
@@ -352,7 +352,7 @@ describe("10.8.3 withTokenUsage", () => {
     });
     expect(
       await withTokenUsage(
-        { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "gpt-4o" },
+        { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "gpt-5.6-terra" },
         { recordUsage } as never,
         async () => response,
       ),
@@ -363,7 +363,7 @@ describe("10.8.3 withTokenUsage", () => {
     const response = { content: "无采集服务" };
     expect(
       await withTokenUsage(
-        { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "gpt-4o-mini" },
+        { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "gpt-5.6-luna" },
         null,
         async () => response,
       ),

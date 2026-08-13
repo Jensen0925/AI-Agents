@@ -31,14 +31,14 @@ export interface GraphNodeCostEstimate {
 
 /** 示例价格，单位为 USD / 1M tokens；上线前请以厂商官网最新报价为准。 */
 export const PRICING: Record<string, ModelPricing> = {
-  "gpt-4o": { input: 2.5, output: 10, cachedInput: 1.25 },
-  "gpt-4o-mini": { input: 0.15, output: 0.6, cachedInput: 0.075 },
+  "gpt-5.6-terra": { input: 2.5, output: 10, cachedInput: 1.25 },
+  "gpt-5.6-luna": { input: 0.15, output: 0.6, cachedInput: 0.075 },
   "claude-sonnet": { input: 3, output: 15, cachedInput: 0.3 },
   "claude-haiku": { input: 0.8, output: 4, cachedInput: 0.08 },
   "deepseek-chat": { input: 0.27, output: 1.1 },
 };
 
-const DEFAULT_MODEL = "gpt-4o-mini";
+const DEFAULT_MODEL = "gpt-5.6-luna";
 
 function stringifyForEstimation(value: unknown): string {
   if (value == null) return "";
@@ -74,7 +74,7 @@ export function estimateTextTokens(text: string | null | undefined): number {
   return chineseTokens + Math.ceil(otherCharacters / 4);
 }
 
-/** 获取模型价格；未知模型回退到 gpt-4o-mini。 */
+/** 获取模型价格；未知模型回退到 gpt-5.6-luna。 */
 export function getModelPricing(modelName: string): ModelPricing {
   const normalized = modelName.trim().toLowerCase();
   return PRICING[normalized] ?? PRICING[DEFAULT_MODEL];

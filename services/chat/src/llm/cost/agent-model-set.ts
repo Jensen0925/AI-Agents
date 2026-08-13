@@ -24,14 +24,14 @@ export interface AgentModelSet {
 }
 
 export const DEFAULT_AGENT_MODEL_SET: AgentModelSet = {
-  supervisorModelConfigId: "demo-gpt-4o",
-  functionalModelConfigId: "demo-gpt-4o-mini",
-  performanceModelConfigId: "demo-gpt-4o-mini",
-  securityModelConfigId: "demo-gpt-4o",
-  complianceModelConfigId: "demo-gpt-4o",
-  riskModelConfigId: "demo-gpt-4o-mini",
-  summaryModelConfigId: "demo-gpt-4o",
-  criticModelConfigId: "demo-gpt-4o",
+  supervisorModelConfigId: "demo-gpt-5.6-terra",
+  functionalModelConfigId: "demo-gpt-5.6-luna",
+  performanceModelConfigId: "demo-gpt-5.6-luna",
+  securityModelConfigId: "demo-gpt-5.6-terra",
+  complianceModelConfigId: "demo-gpt-5.6-terra",
+  riskModelConfigId: "demo-gpt-5.6-luna",
+  summaryModelConfigId: "demo-gpt-5.6-terra",
+  criticModelConfigId: "demo-gpt-5.6-terra",
   compressorModelConfigId: "demo-deepseek-chat",
 };
 

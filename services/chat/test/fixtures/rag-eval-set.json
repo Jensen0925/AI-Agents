@@ -1,0 +1,7 @@
+[
+  {
+    "question": "蓝牙耳机未拆封可以退货吗？",
+    "expectedDocIds": ["refund-policy"],
+    "groundTruth": "在未拆封、包装完整且不影响二次销售的情况下，蓝牙耳机可自签收之日起七日内申请无理由退货。"
+  }
+]
