@@ -8,7 +8,8 @@ import { suggestedQuestions, type ChatMessage } from "@/lib/knowledge-data"
 import { Button } from "@/components/ui/button"
 import { ComponentRenderer } from "@/components/ai-ui/ComponentRenderer"
 import type { AIUIResponse, UIAction, UIResponse } from "@/types/ui-types"
-import { ArrowUp, FileText, Loader2, Sparkles, User } from "lucide-react"
+import { ArrowUp, FileText, Loader2, NotebookPen, Sparkles, User } from "lucide-react"
+import { ArtifactPanel } from "@/components/artifact-panel"
 
 type Conversation = {
   id: string
@@ -152,6 +153,9 @@ export function ChatView({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [conversation, setConversation] = useState<Conversation | null>(null)
+  const [artifactOpen, setArtifactOpen] = useState(false)
+  const [hasArtifact, setHasArtifact] = useState(false)
+  const [artifactRefreshKey, setArtifactRefreshKey] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const handledNewSignalRef = useRef(0)
   const newConversationModeRef = useRef(false)
@@ -177,6 +181,8 @@ export function ChatView({
     if (newConversationModeRef.current && !conversationId) {
       setConversation(null)
       setMessages([])
+      setArtifactOpen(false)
+      setHasArtifact(false)
       setInput("")
       setError("")
       setThinking(false)
@@ -206,6 +212,8 @@ export function ChatView({
       // 先清空上一会话的本地状态，避免切换期间短暂显示旧消息。
       setConversation(null)
       setMessages([])
+      setArtifactOpen(false)
+      setHasArtifact(false)
       setThinking(false)
       setLoading(true)
       setError("")
@@ -334,6 +342,11 @@ export function ChatView({
               }),
         },
       ])
+      // 报告由服务端作为成功分析的旁路持久化。刷新产物面板即可在不阻塞
+      // 聊天响应的前提下显示最新版本。
+      if (!("components" in data) && data.intent === "analyze" && (data.report || data.summary)) {
+        setArtifactRefreshKey((current) => current + 1)
+      }
       setConversation((current) =>
         current ? { ...current, title: current.title === "新会话" ? content.slice(0, 24) : current.title } : current,
       )
@@ -399,6 +412,17 @@ export function ChatView({
           </h1>
           <p className="text-xs text-muted-foreground">基于你的知识库回答，并标注来源</p>
         </div>
+        {hasArtifact && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="ml-auto shrink-0"
+            onClick={() => setArtifactOpen(true)}
+          >
+            <NotebookPen className="size-4" />报告
+          </Button>
+        )}
       </header>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
@@ -458,6 +482,22 @@ export function ChatView({
           <p className="mt-2 text-center text-xs text-muted-foreground">AI 回答可能存在偏差，请结合引用来源核实</p>
         </div>
       </div>
+
+      <ArtifactPanel
+        conversationId={conversation?.id ?? null}
+        open={artifactOpen}
+        onOpenChange={setArtifactOpen}
+        refreshKey={artifactRefreshKey}
+        onAvailabilityChange={setHasArtifact}
+        onTitleChange={(title) => {
+          setConversation((current) => (current ? { ...current, title } : current))
+          if (conversation) {
+            onConversationsChange?.((current) =>
+              current.map((item) => (item.id === conversation.id ? { ...item, title } : item)),
+            )
+          }
+        }}
+      />
     </div>
   )
 }

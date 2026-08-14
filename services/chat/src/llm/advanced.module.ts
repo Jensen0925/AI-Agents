@@ -15,9 +15,10 @@ import { MemoryModule } from "./memory/memory.module";
 import { UiChatController } from "./ui-protocol/ui-chat.controller";
 import { UiFlowService } from "./ui-protocol/ui-flow.service";
 import { UiResponseService } from "./ui-protocol/ui-response.service";
+import { ArtifactModule } from "../artifact/artifact.module";
 
 @Module({
-  imports: [DocumentModule, EmbeddingModule, MemoryModule, MessageModule],
+  imports: [DocumentModule, EmbeddingModule, MemoryModule, MessageModule, ArtifactModule],
   controllers: [
     MemoryController,
     FilesystemController,

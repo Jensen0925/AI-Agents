@@ -15,6 +15,7 @@ model Conversation {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   messages  Message[]
+  artifact  Artifact?
 
   @@index([userId, updatedAt])
   @@map("conversations")
@@ -31,6 +32,46 @@ model Message {
 
   @@index([conversationId, createdAt])
   @@map("messages")
+}
+
+/**
+ * 会话中可编辑的分析报告工件。一个会话只保留一个当前工件，所有历史内容
+ * 记录在 ArtifactVersion 中，避免把版本快照混进普通消息流。
+ */
+model Artifact {
+  id             String            @id @default(cuid())
+  conversationId String            @unique
+  userId         String
+  title          String
+  type           ArtifactType      @default(MARKDOWN)
+  language       String?
+  content        String            @db.Text
+  currentVersion Int               @default(1)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  conversation   Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  versions       ArtifactVersion[]
+
+  @@index([userId, updatedAt])
+  @@map("artifacts")
+}
+
+/** 每次 AI 生成、人工编辑或回滚均产生不可变版本快照。 */
+model ArtifactVersion {
+  id              String   @id @default(cuid())
+  artifactId      String
+  version         Int
+  content         String   @db.Text
+  changelog       String?
+  sourceTags      String[] @default([])
+  sourceMessageId String?
+  createdAt       DateTime @default(now())
+  artifact        Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+
+  @@unique([artifactId, version])
+  @@index([artifactId, createdAt])
+  @@index([artifactId, sourceTags])
+  @@map("artifact_versions")
 }
 
 model Document {
@@ -189,6 +230,14 @@ model RefreshToken {
 enum MessageRole {
   USER
   ASSISTANT
+}
+
+enum ArtifactType {
+  MARKDOWN
+  CODE
+  DOCUMENT
+  TABLE
+  CHART
 }
 
 enum TaskStatus {
