@@ -42,6 +42,16 @@ interface ClarificationDecision {
   questions: string[];
 }
 
+/**
+ * 跨工单长链路判定：只有输入中出现至少两个不同的 REQ 编号才升级到
+ * DeepAgent/联合分析。单编号、重复编号和无编号请求继续走普通主图。
+ */
+export function detectLongChain(input: string): boolean {
+  const ids = input.match(/REQ-?\d+/gi) ?? [];
+  const distinct = new Set(ids.map((id) => id.toUpperCase().replace(/-/g, "")));
+  return distinct.size >= 2;
+}
+
 function normalizeJsonOutput(output: string): string {
   const trimmed = output.trim();
   const withoutFence = trimmed

@@ -205,7 +205,7 @@ describe("AdvancedAnalysisService", () => {
         _metadata?: unknown,
       ) => undefined,
     );
-    const similaritySearch = mock(async () => [
+    const search = mock(async () => [
       { content: "需求必须支持上下文裁剪", score: 0.82 },
     ]);
     const service = new AdvancedAnalysisService(
@@ -214,7 +214,7 @@ describe("AdvancedAnalysisService", () => {
         getHistoryAsLangChainMessages,
         addMessage,
       } as unknown as MessageService,
-      { similaritySearch } as unknown as SearchService,
+      { search } as unknown as SearchService,
     );
     const input = "帮我判断这个需求是否完整，并产出一份需求分析报告";
 
@@ -225,7 +225,7 @@ describe("AdvancedAnalysisService", () => {
     expect(runAnalysisGraph.mock.calls[0]?.[0]).toBe(input);
     expect(runAnalysisGraph.mock.calls[0]?.[1]).toContain("REQ-2026-001");
     expect(runAnalysisGraph.mock.calls[0]?.[1]).toContain("需求必须支持上下文裁剪");
-    expect(similaritySearch).toHaveBeenCalledWith(input, "user-1", 3);
+    expect(search).toHaveBeenCalledWith(input, "user-1", 3);
     expect(addMessage.mock.calls.map((call) => call.slice(0, 3))).toEqual([
       ["conversation-1", MessageRole.USER, input],
       [
@@ -258,6 +258,34 @@ describe("AdvancedAnalysisService", () => {
     });
   });
 
+  it("archives a completed analysis report without making artifact failure part of chat success", async () => {
+    const addMessage = mock(async () => undefined);
+    const upsertGeneratedReport = mock(async () => ({ id: "artifact-1" }));
+    const service = new AdvancedAnalysisService(
+      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      {
+        getHistoryAsLangChainMessages: mock(async () => []),
+        addMessage,
+      } as unknown as MessageService,
+      { search: mock(async () => []) } as unknown as SearchService,
+      { upsertGeneratedReport } as never,
+    );
+
+    const result = await service.analyze(
+      "user-1",
+      "conversation-1",
+      "请分析用户登录需求并输出报告",
+    );
+
+    expect(result.report).toBeTruthy();
+    expect(upsertGeneratedReport).toHaveBeenCalledWith({
+      conversationId: "conversation-1",
+      userId: "user-1",
+      title: "请分析用户登录需求并输出报告",
+      content: result.report,
+    });
+  });
+
   it("persists clarification questions as the assistant conclusion", async () => {
     runAnalysisGraph.mockImplementation(async () => {
       throw new Error("graph unavailable");
@@ -278,14 +306,14 @@ describe("AdvancedAnalysisService", () => {
         _metadata?: unknown,
       ) => undefined,
     );
-    const similaritySearch = mock(async () => []);
+    const search = mock(async () => []);
     const service = new AdvancedAnalysisService(
       { orchestrate } as unknown as OrchestratorServiceType,
       {
         getHistoryAsLangChainMessages,
         addMessage,
       } as unknown as MessageService,
-      { similaritySearch } as unknown as SearchService,
+      { search } as unknown as SearchService,
     );
     const result = await service.analyze(
       "user-1",
@@ -327,7 +355,7 @@ describe("AdvancedAnalysisService", () => {
         getHistoryAsLangChainMessages: mock(async () => []),
         addMessage,
       } as unknown as MessageService,
-      { similaritySearch: mock(async () => []) } as unknown as SearchService,
+      { search: mock(async () => []) } as unknown as SearchService,
     );
 
     const result = await service.analyze(
@@ -347,14 +375,14 @@ describe("AdvancedAnalysisService", () => {
   it("answers casual chat without invoking retrieval or the analysis graph", async () => {
     const runMock = runAnalysisGraph;
     const addMessage = mock(async () => undefined);
-    const similaritySearch = mock(async () => []);
+    const search = mock(async () => []);
     const service = new AdvancedAnalysisService(
       { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
         getHistoryAsLangChainMessages: mock(async () => []),
         addMessage,
       } as unknown as MessageService,
-      { similaritySearch } as unknown as SearchService,
+      { search } as unknown as SearchService,
     );
 
     const result = await service.analyze(
@@ -364,7 +392,7 @@ describe("AdvancedAnalysisService", () => {
     );
 
     expect(runMock).not.toHaveBeenCalled();
-    expect(similaritySearch).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
     expect(result.intent).toBe("chat");
     expect(result.report).toBeNull();
     expect(result.summary).not.toContain("## 需求摘要");
@@ -374,14 +402,14 @@ describe("AdvancedAnalysisService", () => {
   it("asks targeted questions for a brief login requirement", async () => {
     const runMock = runAnalysisGraph;
     const addMessage = mock(async () => undefined);
-    const similaritySearch = mock(async () => []);
+    const search = mock(async () => []);
     const service = new AdvancedAnalysisService(
       { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
         getHistoryAsLangChainMessages: mock(async () => []),
         addMessage,
       } as unknown as MessageService,
-      { similaritySearch } as unknown as SearchService,
+      { search } as unknown as SearchService,
     );
 
     const result = await service.analyze(
@@ -391,7 +419,7 @@ describe("AdvancedAnalysisService", () => {
     );
 
     expect(runMock).not.toHaveBeenCalled();
-    expect(similaritySearch).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
     expect(result.status).toBe("clarification_required");
     expect(result.intent).toBe("analyze");
     expect(result.report).toBeNull();
@@ -420,7 +448,7 @@ describe("AdvancedAnalysisService", () => {
         getHistoryAsLangChainMessages: mock(async () => [...persisted]),
         addMessage,
       } as unknown as MessageService,
-      { similaritySearch: mock(async () => []) } as unknown as SearchService,
+      { search: mock(async () => []) } as unknown as SearchService,
     );
 
     const first = await service.analyze(
@@ -470,14 +498,14 @@ describe("AdvancedAnalysisService", () => {
         );
       },
     );
-    const similaritySearch = mock(async () => []);
+    const search = mock(async () => []);
     const service = new AdvancedAnalysisService(
       { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
         getHistoryAsLangChainMessages: mock(async () => [...persisted]),
         addMessage,
       } as unknown as MessageService,
-      { similaritySearch } as unknown as SearchService,
+      { search } as unknown as SearchService,
     );
 
     const identity = await service.analyze(
@@ -506,6 +534,6 @@ describe("AdvancedAnalysisService", () => {
     expect(followUp.summary).toContain("不能编造订单状态");
     expect(followUp.summary).not.toContain("请稍后重试");
     expect(runAnalysisGraph).not.toHaveBeenCalled();
-    expect(similaritySearch).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
   });
 });

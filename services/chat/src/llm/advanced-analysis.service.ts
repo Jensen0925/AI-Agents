@@ -20,10 +20,16 @@ import {
 import {
   type AnalysisGraphStep,
   classifyIntentByKeywords,
+  buildRetrievedContextBlock,
   type RequirementIntent,
   type RunAnalysisGraphOutput,
 } from "./graph/requirement-analysis-graph";
 import { runAnalysisGraph } from "./graph/analysis-graph.runner";
+import { createChatModel } from "./model.factory";
+import { createDeepOrchestrator } from "./deepagent/deep-orchestrator.service";
+import { detectLongChain } from "./agents/orchestrator.service";
+import { ArtifactService } from "../artifact/artifact.service";
+import { createConversationTitle } from "../conversation/conversation-title";
 
 export interface AdvancedAnalysisResult {
   report: string | null;
@@ -68,6 +74,33 @@ function formatRetrievedContext(documents: DocumentSearchResult[]): string {
       },
     )
     .join("\n\n");
+}
+
+function extractDeepAgentText(value: unknown): string {
+  if (!value || typeof value !== "object") return "";
+  const candidate = value as {
+    messages?: Array<{ content?: unknown }>;
+    output?: unknown;
+  };
+  if (Array.isArray(candidate.messages)) {
+    for (let index = candidate.messages.length - 1; index >= 0; index -= 1) {
+      const content = candidate.messages[index]?.content;
+      const text = typeof content === "string"
+        ? content
+        : Array.isArray(content)
+          ? content
+              .map((part) =>
+                part && typeof part === "object" && "text" in part
+                  ? String((part as { text: unknown }).text)
+                  : "",
+              )
+              .filter(Boolean)
+              .join("\n")
+          : "";
+      if (text.trim()) return text.trim();
+    }
+  }
+  return typeof candidate.output === "string" ? candidate.output.trim() : "";
 }
 
 const ANALYSIS_STEPS = new Set<AnalysisGraphStep>([
@@ -646,6 +679,8 @@ export class AdvancedAnalysisService {
     private readonly orchestratorService: OrchestratorService,
     private readonly messageService: MessageService,
     private readonly searchService: SearchService,
+    /** 报告工件是可选增强能力，归档失败不能影响用户本轮聊天。 */
+    private readonly artifactService?: ArtifactService,
   ) {}
 
   /**
@@ -827,7 +862,7 @@ export class AdvancedAnalysisService {
     if (retrieval.enabled) {
       try {
         retrievedDocuments = await withDeadline(
-          this.searchService.similaritySearch(
+          this.searchService.search(
             normalizedInput,
             userId,
             Math.max(1, Math.floor(retrieval.topK)),
@@ -865,6 +900,69 @@ export class AdvancedAnalysisService {
     ]
       .filter(Boolean)
       .join("\n\n");
+
+    // 跨多个显式需求编号时使用 Plan/DeepAgent 外层编排；单需求仍留在
+    // 既有主图。DeepAgent 失败只影响本次长链路由，随后继续走主图降级，
+    // 不把可恢复的实验能力变成聊天接口的 500。
+    if (detectLongChain(normalizedInput)) {
+      try {
+        const deepModel = createChatModel({ reasoningEffort: "high" });
+        const deepAgent = createDeepOrchestrator({
+          model: deepModel,
+          retrievedContext: formatRetrievedContext(retrievedDocuments),
+        });
+        const deepResult = await withDeadline(
+          deepAgent.invoke({
+            messages: [
+              new HumanMessage(
+                [
+                  normalizedInput,
+                  buildRetrievedContextBlock(formatRetrievedContext(retrievedDocuments)),
+                ]
+                  .filter(Boolean)
+                  .join("\n\n"),
+              ),
+            ],
+          }),
+          this.analysisTimeoutMs,
+        );
+        const deepReport = extractDeepAgentText(deepResult);
+        if (deepReport) {
+          try {
+            await withDeadline(
+              chatHistory.addMessage(new AIMessage(deepReport)),
+              Math.min(2_000, this.retrievalTimeoutMs),
+            );
+          } catch (error) {
+            this.logger.warn(
+              `DeepAgent result persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+          await this.persistReportArtifact(
+            userId,
+            conversationId,
+            normalizedInput,
+            deepReport,
+          );
+          return {
+            report: deepReport,
+            status: "completed",
+            fallback: null,
+            intent: "analyze",
+            summary: deepReport,
+            clarificationQuestions: [],
+            usedAgents: ["analysisAgent", "summaryAgent"],
+            retrievedDocuments,
+            steps: ["analysisStep", "summaryStep"],
+          };
+        }
+        this.logger.warn("DeepAgent returned no textual report; falling back to the main graph");
+      } catch (error) {
+        this.logger.warn(
+          `DeepAgent route unavailable; falling back to main graph: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
 
     let graphResult: RunAnalysisGraphOutput;
     let legacyFallbackResult: OrchestrationResult | undefined;
@@ -1006,10 +1104,18 @@ export class AdvancedAnalysisService {
         compatibilityResult.clarificationQuestions =
           legacyFallbackResult.clarificationQuestions;
       }
+      if (compatibilityResult.report) {
+        await this.persistReportArtifact(
+          userId,
+          conversationId,
+          normalizedInput,
+          compatibilityResult.report,
+        );
+      }
       return compatibilityResult;
     }
 
-    return {
+    const result: AdvancedAnalysisResult = {
       report:
         graphResult.intent === "analyze" && clarificationQuestions.length === 0
           ? graphResult.summary?.trim() || conclusion
@@ -1030,5 +1136,38 @@ export class AdvancedAnalysisService {
       chatResponse: graphResult.chatResponse,
       steps: graphResult.steps,
     };
+    if (result.report) {
+      await this.persistReportArtifact(
+        userId,
+        conversationId,
+        normalizedInput,
+        result.report,
+      );
+    }
+    return result;
+  }
+
+  /** 工件写入属于侧路：分析结果已可返回时，持久化故障不得改变聊天结果。 */
+  private async persistReportArtifact(
+    userId: string,
+    conversationId: string,
+    input: string,
+    report: string,
+  ): Promise<void> {
+    if (!this.artifactService || !report.trim()) return;
+    try {
+      await this.artifactService.upsertGeneratedReport({
+        conversationId,
+        userId,
+        title: createConversationTitle(input),
+        content: report,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Report artifact persistence failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 }
