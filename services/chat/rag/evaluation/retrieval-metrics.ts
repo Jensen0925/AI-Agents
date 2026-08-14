@@ -37,6 +37,29 @@ export function recallAtK(
 }
 
 /**
+ * Precision@K：Top-K 中命中的相关块数 / K。实际返回不足 K 条时仍以 K 为分母，
+ * 这样空检索或过早截断不会获得虚高分数。
+ */
+export function precisionAtK(
+  retrievedIds: string[],
+  relevantIds: string[],
+  k: number,
+): number {
+  const topK = normalizedK(k);
+  const relevant = normalizedRelevantIds(relevantIds);
+  if (topK === 0 || relevant.size === 0) {
+    return 0;
+  }
+
+  const hits = new Set(
+    retrievedIds
+      .slice(0, topK)
+      .filter((id) => relevant.has(id)),
+  );
+  return hits.size / topK;
+}
+
+/**
  * Mean Reciprocal Rank：每个查询只关注第一个相关结果出现的排名。
  * 没有相关结果的查询按 0 计入平均值。
  */

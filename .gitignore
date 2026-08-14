@@ -7,3 +7,4 @@ dist
 .env.local
 .DS_Store
 services/chat/uploads/
+services/chat/eval/reports/

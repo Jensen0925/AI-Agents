@@ -12,6 +12,7 @@ import { similaritySearch } from "../rag/retrieval/vector-store";
 import {
   mrr,
   ndcgAtK,
+  precisionAtK,
   recallAtK,
 } from "../rag/evaluation/retrieval-metrics";
 import { runRagasEvaluation } from "../rag/evaluation/ragas-runner";
@@ -208,6 +209,10 @@ describe("11.7 评估", () => {
   it("11.7.1 MRR 在第 1 位命中为 1，在第 2 位命中为 0.5", () => {
     expect(mrr([["doc-a", "doc-b"]], [["doc-a"]])).toBe(1);
     expect(mrr([["doc-a", "doc-b"]], [["doc-b"]])).toBe(0.5);
+  });
+
+  it("11.7.1 Precision@K 使用 Top-K 作为分母", () => {
+    expect(precisionAtK(["doc-a", "doc-b"], ["doc-a"], 2)).toBe(0.5);
   });
 
   it("11.7.1 单个相关文档完全命中时 NDCG@K 为 1", () => {

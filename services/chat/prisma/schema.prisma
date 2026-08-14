@@ -149,6 +149,23 @@ model TokenUsage {
   @@map("token_usages")
 }
 
+model EvalRun {
+  id             String   @id @default(cuid())
+  gitSha         String?  @db.VarChar(80)
+  model          String   @db.VarChar(100)
+  startedAt      DateTime
+  finishedAt     DateTime?
+  overallMetrics Json
+  passed         Boolean
+  reportPath     String?  @db.VarChar(500)
+  reportJson     Json?
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([passed, createdAt])
+  @@map("eval_runs")
+}
+
 model User {
   id            String         @id @default(uuid())
   email         String         @unique

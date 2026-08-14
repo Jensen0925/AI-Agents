@@ -12,6 +12,10 @@ export interface CreateChatModelOptions {
    * 项目不再使用 low，以免影响分类、工具选择和业务结论质量。
    */
   reasoningEffort?: ReasoningEffort;
+  /**
+   * 允许评测或一次性脚本显式覆盖模型，常规业务调用仍使用集中 YAML 配置。
+   */
+  modelName?: string;
 }
 
 /** OpenAI SDK 的 baseURL 必须指向 API 根路径，而不是站点根地址。 */
@@ -32,7 +36,7 @@ export function createChatModel(
   const { apiKey, baseURL } = getApiKeys().openai;
 
   return new ChatOpenAI({
-    model: llm.model,
+    model: options.modelName?.trim() || llm.model,
     // 当前 SDK 版本仅把 reasoningEffort 暴露为调用级选项；通过 modelKwargs
     // 透传 OpenAI 兼容参数，避免每一个 invoke 都重复传递。
     modelKwargs: {
