@@ -12,6 +12,8 @@ retrieval:
   enabled: true
   topK: 3
   minScore: 0.35
+  mode: hybrid
+  timeoutMs: 8000
 
 tools:
   enabled: false

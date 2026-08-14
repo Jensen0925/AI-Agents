@@ -76,6 +76,52 @@ describe("SearchService", () => {
       { content: "用户登录需求", score: 0.81 },
     ]);
   });
+
+  it("uses vector plus BM25 retrieval, then returns reranked chunk ids", async () => {
+    const queryRaw = mock(async () => {
+      const callIndex = queryRaw.mock.calls.length;
+      return callIndex === 1
+        ? [
+            {
+              id: "chunk-login",
+              documentId: "doc-login",
+              chunkIndex: 0,
+              content: "登录使用 OAuth2 授权码模式",
+              score: 0.9,
+            },
+          ]
+        : [
+            {
+              id: "chunk-login",
+              documentId: "doc-login",
+              chunkIndex: 0,
+              content: "登录使用 OAuth2 授权码模式",
+              score: 0,
+            },
+            {
+              id: "chunk-weather",
+              documentId: "doc-weather",
+              chunkIndex: 1,
+              content: "今天天气不错",
+              score: 0,
+            },
+          ];
+    });
+    const embedTexts = mock(async (texts: string[]) =>
+      texts.length === 1
+        ? [[1, 0]]
+        : texts.map((_, index) => (index === 0 || index === 1 ? [1, 0] : [0, 1])),
+    );
+    const service = new SearchService(
+      { $queryRaw: queryRaw } as unknown as PrismaService,
+      { embedTexts } as unknown as DocumentEmbeddingService,
+    );
+
+    await expect(service.search("OAuth2 登录", "user-1", 1)).resolves.toEqual([
+      { id: "chunk-login", content: "登录使用 OAuth2 授权码模式", score: 1 },
+    ]);
+    expect(queryRaw).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("SearchController", () => {

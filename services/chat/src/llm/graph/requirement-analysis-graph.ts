@@ -352,6 +352,24 @@ function getRetrievedContext(state: RequirementAnalysisStateValue): string {
   return state.retrievedContext?.trim() || DEFAULT_RETRIEVED_CONTEXT;
 }
 
+/**
+ * 将检索结果作为可选的参考资料注入模型提示词。
+ * 占位文本不应进入上下文，否则模型会把“没有资料”当成业务事实。
+ */
+export function buildRetrievedContextBlock(retrievedContext?: string): string {
+  const context = (retrievedContext ?? "").trim();
+  if (
+    !context ||
+    context === "无相关参考文档" ||
+    context === "当前用户知识库没有检索到相关文档。" ||
+    context === "当前知识库没有检索到相关资料。"
+  ) {
+    return "";
+  }
+
+  return `\n\n## 参考资料（来自知识库检索）\n${context}\n请优先依据以上资料作答；资料未覆盖处请明确标注待确认，不要编造资料中没有的事实。`;
+}
+
 export const MAX_ANALYSIS_TOOL_LOOPS = 6;
 
 const ANALYSIS_AGENT_SYSTEM_PROMPT = `你是需求分析 ReAct Agent，负责为需求分析主流程产出多维度分析结论。
@@ -921,8 +939,9 @@ function createSummaryActorNode(model: BaseChatModel) {
     state: RequirementAnalysisStateValue,
   ): Promise<RequirementAnalysisStateUpdate> => {
     const input = getInput(state);
+    const retrievedBlock = buildRetrievedContextBlock(state.retrievedContext);
     const response = await model.invoke([
-      new SystemMessage(SUMMARY_ACTOR_SYSTEM_PROMPT),
+      new SystemMessage(`${SUMMARY_ACTOR_SYSTEM_PROMPT}${retrievedBlock}`),
       new HumanMessage(
         [
           `原始需求：${input}`,

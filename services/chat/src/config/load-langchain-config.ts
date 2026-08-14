@@ -18,6 +18,10 @@ export interface LangchainConfig {
     enabled: boolean;
     topK: number;
     minScore: number;
+    /** simple=仅向量；hybrid=向量与 BM25 召回后再重排。默认 hybrid。 */
+    mode: "simple" | "hybrid";
+    /** 统一检索入口的硬超时（毫秒），超时后降级为空上下文。 */
+    timeoutMs: number;
   };
   tools: {
     enabled: boolean;
@@ -111,6 +115,24 @@ function readStringArray(record: Record<string, unknown>, key: string): string[]
   return value;
 }
 
+function readOptionalString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readOptionalPositiveNumber(
+  record: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
 function optionalEnv(name: string): string | undefined {
   // 空字符串按“未配置”处理，兼容仓库中的空值 .env 模板。
   const value = process.env[name]?.trim();
@@ -177,6 +199,11 @@ export function loadLangchainConfig(): LangchainConfig {
       enabled: readBoolean(retrieval, "enabled"),
       topK: readNumber(retrieval, "topK"),
       minScore: readNumber(retrieval, "minScore"),
+      mode:
+        readOptionalString(retrieval, "mode") === "simple"
+          ? "simple"
+          : "hybrid",
+      timeoutMs: readOptionalPositiveNumber(retrieval, "timeoutMs") ?? 8_000,
     },
     tools: {
       enabled: readBoolean(tools, "enabled"),
