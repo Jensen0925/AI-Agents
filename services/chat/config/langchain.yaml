@@ -1,5 +1,6 @@
 llm:
-  model: gpt-5.6-luna
+  model: gpt-5.6-terra
+  reasoningEffort: high
   temperature: 0
   maxTokens: 1024
   timeoutMs: 30000

@@ -4,6 +4,7 @@
   "workspaces": [
     "clients/*",
     "services/*",
+    "mcp-servers/*",
     "packages/*"
   ],
   "scripts": {

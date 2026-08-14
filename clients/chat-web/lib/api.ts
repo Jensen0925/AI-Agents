@@ -6,7 +6,9 @@ import { clearSession, getSession, saveSession, type Session } from "./auth";
  */
 export const api = axios.create({
   baseURL: "/api",
-  timeout: 15_000,
+  // 完整需求分析包含多次模型调用，给后端 30 秒总时限留出网络余量。
+  // 单个请求仍可通过 config.timeout 覆盖。
+  timeout: 45_000,
   headers: { "Content-Type": "application/json" },
 });
 

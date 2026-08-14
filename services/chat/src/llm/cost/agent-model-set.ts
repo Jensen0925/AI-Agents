@@ -25,14 +25,27 @@ export interface AgentModelSet {
 
 export const DEFAULT_AGENT_MODEL_SET: AgentModelSet = {
   supervisorModelConfigId: "demo-gpt-5.6-terra",
-  functionalModelConfigId: "demo-gpt-5.6-luna",
-  performanceModelConfigId: "demo-gpt-5.6-luna",
+  functionalModelConfigId: "demo-gpt-5.6-terra",
+  performanceModelConfigId: "demo-gpt-5.6-terra",
   securityModelConfigId: "demo-gpt-5.6-terra",
   complianceModelConfigId: "demo-gpt-5.6-terra",
-  riskModelConfigId: "demo-gpt-5.6-luna",
+  riskModelConfigId: "demo-gpt-5.6-terra",
   summaryModelConfigId: "demo-gpt-5.6-terra",
   criticModelConfigId: "demo-gpt-5.6-terra",
-  compressorModelConfigId: "demo-deepseek-chat",
+  compressorModelConfigId: "demo-gpt-5.6-terra",
+};
+
+/** 同一 Terra 模型按节点风险区分推理强度，不再切换到其他模型。 */
+export const AGENT_REASONING_EFFORT: Record<AgentName, "medium" | "high"> = {
+  supervisor: "high",
+  functional_expert: "medium",
+  performance_expert: "medium",
+  security_expert: "high",
+  compliance_expert: "high",
+  risk_agent: "high",
+  summary_agent: "high",
+  critic: "high",
+  compressor: "medium",
 };
 
 /** 不允许因预算或低复杂度自动降级的高风险角色。 */
@@ -65,6 +78,7 @@ export interface ResolveModelForAgentInput {
 
 export interface ResolvedAgentModel {
   selectedModelConfigId: string;
+  reasoningEffort: "medium" | "high";
   overrideReason: string | null;
 }
 
@@ -79,14 +93,20 @@ export function resolveModelForAgent(
   const defaultModelConfigId = modelSet[AGENT_TO_CONFIG_KEY[input.agentName]];
   const usedPercent = input.budgetStatus?.usedPercent ?? 0;
   const isHighRisk = HIGH_RISK_AGENTS.includes(input.agentName);
+  const reasoningEffort = AGENT_REASONING_EFFORT[input.agentName];
 
   if (usedPercent >= 100 && input.agentName === "compressor") {
-    return { selectedModelConfigId: defaultModelConfigId, overrideReason: null };
+    return {
+      selectedModelConfigId: defaultModelConfigId,
+      reasoningEffort,
+      overrideReason: null,
+    };
   }
 
   if (usedPercent >= 100) {
     return {
       selectedModelConfigId: defaultModelConfigId,
+      reasoningEffort,
       overrideReason: "budget_exceeded_reject",
     };
   }
@@ -94,6 +114,7 @@ export function resolveModelForAgent(
   if (usedPercent >= 80 && !isHighRisk) {
     return {
       selectedModelConfigId: modelSet.compressorModelConfigId,
+      reasoningEffort: "medium",
       overrideReason: `budget_tight_downgrade (${usedPercent}%)`,
     };
   }
@@ -101,9 +122,14 @@ export function resolveModelForAgent(
   if (input.requirementComplexity === "low" && !isHighRisk) {
     return {
       selectedModelConfigId: modelSet.compressorModelConfigId,
+      reasoningEffort: "medium",
       overrideReason: "low_complexity_downgrade",
     };
   }
 
-  return { selectedModelConfigId: defaultModelConfigId, overrideReason: null };
+  return {
+    selectedModelConfigId: defaultModelConfigId,
+    reasoningEffort,
+    overrideReason: null,
+  };
 }

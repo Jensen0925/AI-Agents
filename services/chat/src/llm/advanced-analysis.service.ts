@@ -1,5 +1,6 @@
 import {
   AIMessage,
+  type BaseMessage,
   HumanMessage,
   type MessageContent,
 } from "@langchain/core/messages";
@@ -201,6 +202,14 @@ function analysisConclusion(result: RunAnalysisGraphOutput): string {
   }
 
   const clarificationQuestions = parseClarificationQuestions(result.clarified);
+  // 会话式澄清会把“已记录的信息 + 下一问题”放入 summary，必须原样展示；
+  // 旧编排则只提供 clarified，不能让归一化时附带的本地报告覆盖它。
+  if (
+    result.summary?.trim() &&
+    /^(正在完善|我先记下)/u.test(result.summary.trim())
+  ) {
+    return result.summary.trim();
+  }
   if (clarificationQuestions.length > 0) {
     return [
       "需要进一步澄清以下问题：",
@@ -254,6 +263,225 @@ function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
+/** 只有用户明确要求拆解/报告时，才启动完整的多 Agent 分析链。 */
+function requestsFullAnalysis(input: string): boolean {
+  return /(?:分析|拆解|评估|生成|输出|整理).*(?:需求|报告|方案|功能分解|用户故事|验收标准|开发排期)|(?:需求分析|完整分析|综合分析|功能分解|用户故事|验收标准|开发排期)/iu.test(
+    input,
+  );
+}
+
+/** 短业务描述先澄清关键信息，避免用固定报告“猜测”用户意图。 */
+function isBriefRequirement(input: string): boolean {
+  return (
+    input.length <= 100 &&
+    /(登录|注册|权限|鉴权|认证|验证码|账号.{0,3}密码|导入|导出|支付|订单|搜索|报表|系统|功能|接口|页面|需求|模块)/iu.test(
+      input,
+    )
+  );
+}
+
+function isLoginClarificationAnswer(input: string): boolean {
+  return /^(?:账号.{0,3}密码|密码登录|手机号.{0,4}验证码|验证码登录|第三方登录|微信登录|钉钉登录|SSO|管理员.{0,12}|普通用户.{0,12}|访客.{0,12}|需要.{0,20}(?:验证码|锁定|找回密码|双因素|记住登录)|(?:首页|工作台|dashboard|会话有效期).{0,20})$/iu.test(
+    input.trim(),
+  );
+}
+
+function userMessagesText(history: BaseMessage[], input: string): string[] {
+  return [
+    ...history
+      .filter((message) => message.getType() === "human")
+      .map((message) => contentToText(message.content).trim())
+      .filter(Boolean),
+    input,
+  ];
+}
+
+function latestMatchingText(
+  messages: string[],
+  pattern: RegExp,
+): string | undefined {
+  return [...messages].reverse().find((message) => pattern.test(message));
+}
+
+function createLoginClarification(
+  input: string,
+  history: BaseMessage[],
+): { response: string; questions: string[] } {
+  const messages = userMessagesText(history, input);
+  const requirement = messages.find(
+    (message) =>
+      /(想做|需要|开发|实现|创建|设计).*(登录|注册|鉴权|认证)|(登录|注册).*(页面|功能|系统)/iu.test(
+        message,
+      ),
+  );
+  const loginMethod = latestMatchingText(
+    messages,
+    /(账号.{0,3}密码|密码登录|手机号.{0,4}验证码|验证码登录|第三方登录|微信登录|钉钉登录|SSO)/iu,
+  );
+  const roles = latestMatchingText(
+    messages,
+    /(管理员|普通用户|访客|运营|员工|商家|客户|角色)/iu,
+  );
+  const security = latestMatchingText(
+    messages,
+    /(失败锁定|找回密码|双因素|二次认证|记住登录|图形验证码|验证码保护)/iu,
+  );
+  const destination = latestMatchingText(
+    messages,
+    /(跳转|首页|工作台|dashboard|会话有效期|登录状态|天有效)/iu,
+  );
+
+  const answered = [
+    loginMethod ? `登录方式：${loginMethod}` : "",
+    roles ? `用户角色：${roles}` : "",
+    security ? `安全规则：${security}` : "",
+    destination ? `登录后行为：${destination}` : "",
+  ].filter(Boolean);
+
+  let nextQuestion: string;
+  if (!loginMethod) {
+    nextQuestion =
+      "登录方式选哪一种：账号密码、手机号验证码、第三方登录，还是 SSO？";
+  } else if (!roles) {
+    nextQuestion = "用户角色有哪些？例如管理员、普通用户；不同角色登录后能访问哪些功能？";
+  } else if (!security) {
+    nextQuestion = "安全规则需要哪些：验证码保护、连续失败锁定、找回密码、记住登录或双因素认证？";
+  } else if (!destination) {
+    nextQuestion = "登录成功后要跳转到哪里？登录状态或会话有效期需要保持多久？";
+  } else {
+    nextQuestion =
+      "关键信息已齐全。你希望我下一步输出登录页面原型、接口设计，还是完整的功能拆解与验收标准？";
+  }
+
+  const response = [
+    requirement ? `正在完善：${requirement}` : "正在完善登录需求。",
+    answered.length ? `已记录：${answered.join("；")}。` : "",
+    "",
+    `下一步请确认：${nextQuestion}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { response, questions: [nextQuestion] };
+}
+
+function createBriefClarificationResult(
+  input: string,
+  history: BaseMessage[] = [],
+): RunAnalysisGraphOutput {
+  let questions: string[] = [];
+  let response = "";
+  if (/(登录|注册|鉴权|认证)/iu.test(input) ||
+      history.some((message) =>
+        message.getType() === "human" &&
+        /(登录|注册|鉴权|认证)/iu.test(contentToText(message.content)),
+      )) {
+    ({ response, questions } = createLoginClarification(input, history));
+  } else if (/(导入|导出|Excel|CSV)/iu.test(input)) {
+    questions = [
+      "需要导入或导出的文件格式、最大行数和单文件大小是多少？",
+      "字段映射、必填校验和重复数据如何处理？",
+      "失败记录是否需要提供下载或重新处理？",
+      "哪些角色可以执行这项操作？",
+    ];
+  } else if (/(权限|角色|鉴权)/iu.test(input)) {
+    questions = [
+      "系统需要哪些角色和权限粒度（菜单、按钮、数据范围）？",
+      "权限变更是否需要审批和审计记录？",
+      "无权限访问时应如何提示和处理？",
+    ];
+  } else {
+    questions = [
+      "目标用户是谁，主要要解决什么问题？",
+      "核心流程和必须支持的功能有哪些？",
+      "验收标准、优先级和边界条件分别是什么？",
+    ];
+  }
+  if (!response) {
+    response = [
+      `我先记下这个需求：${input}`,
+      "",
+      "为了把需求设计准确，请补充以下信息：",
+      ...questions.map((question) => `- ${question}`),
+      "",
+      "补充后我可以继续输出功能拆解、接口建议和验收标准。",
+    ].join("\n");
+  }
+  return {
+    messages: [new AIMessage(response)],
+    intent: "analyze",
+    clarified: JSON.stringify({ needsClarification: true, questions }),
+    summary: response,
+    steps: ["classifier", "clarifyStep"],
+  };
+}
+
+function createLocalChatResponse(input: string): string {
+  if (/(什么模型|哪个模型|模型版本)/iu.test(input)) {
+    return "我是 CloudSage 应用里的需求分析助手。底层模型由服务端当前的模型配置决定；我不能仅凭聊天内容可靠确认具体模型名称。";
+  }
+  if (/(天气|气温|下雨|晴)/iu.test(input)) {
+    return "我无法直接获取实时天气，但可以帮你查询天气接口需求、设计展示方案，或分析一段天气相关的产品需求。";
+  }
+  if (/(你能做什么|有什么能力|帮助)/iu.test(input)) {
+    return "我是 CloudSage 需求分析助手，可以进行需求澄清、功能拆解、风险评估、知识库查询和验收标准整理。";
+  }
+  if (/(谢谢|感谢)/iu.test(input)) {
+    return "不客气。如果你愿意，继续发我一段需求，我可以帮你把它整理成可执行的方案。";
+  }
+  return "你好！我是 CloudSage 需求分析助手。你可以直接描述想做的功能，或让我帮你分析、查询和拆解需求。";
+}
+
+function hasOrderQueryContext(input: string, history: BaseMessage[]): boolean {
+  return (
+    /(订单|物流|发货|退款单|支付单)/iu.test(input) ||
+    history.some(
+      (message) =>
+        message.getType() === "human" &&
+        /(订单|物流|发货|退款单|支付单)/iu.test(
+          contentToText(message.content),
+        ),
+    )
+  );
+}
+
+function createOrderQueryResult(
+  input: string,
+  history: BaseMessage[],
+): RunAnalysisGraphOutput {
+  const hasOrderId = /(?:订单(?:号|编号)?|order\s*id)\s*[:：#]?[A-Za-z0-9_-]{4,}/iu.test(
+    input,
+  );
+  const asksWhy = /(为什么|为何|怎么不能|不能查询|查不了|无法查询)/iu.test(
+    input,
+  );
+  let response: string;
+  if (asksWhy) {
+    response = [
+      "因为当前 CloudSage Chat 服务还没有接入订单数据库或订单查询 API。",
+      "现在已接入的是会话、需求分析和用户文档知识库；没有真实订单数据时，我不能编造订单状态。",
+      "要支持实际查询，需要接入订单服务，并按当前登录用户校验订单访问权限。",
+    ].join("\n");
+  } else if (hasOrderId) {
+    response = [
+      "我识别到了订单编号，但当前服务尚未接入订单数据源，所以暂时不能返回真实状态。",
+      "接入订单 API 后，可以继续查询订单状态、支付状态、物流信息和退款进度。",
+    ].join("\n");
+  } else {
+    response = [
+      "可以帮你梳理订单查询，但当前服务还没有接入真实订单数据源。",
+      "请先提供订单号，并说明要查询的是订单状态、支付状态、物流还是退款进度。",
+      "若要返回真实结果，还需要把订单 API 或数据库查询工具接入 CloudSage。",
+    ].join("\n");
+  }
+  return {
+    messages: [new AIMessage(response)],
+    intent: "query",
+    queryResponse: response,
+    summary: response,
+    steps: ["classifier", "queryHandler"],
+  };
+}
+
 function localFallbackResult(
   input: string,
   retrievedDocuments: DocumentSearchResult[],
@@ -261,8 +489,7 @@ function localFallbackResult(
   const intent = classifyIntentByKeywords(input);
 
   if (intent === "chat") {
-    const response =
-      "你好！我是 CloudSage 需求分析助手，可以协助需求拆解、风险评估和知识库查询。";
+    const response = createLocalChatResponse(input);
     return {
       messages: [new AIMessage(response)],
       intent,
@@ -288,6 +515,10 @@ function localFallbackResult(
       summary: response,
       steps: ["classifier", "queryHandler"],
     };
+  }
+
+  if (!requestsFullAnalysis(input)) {
+    return createBriefClarificationResult(input);
   }
 
   const securityNote = /(登录|认证|鉴权|密码|权限|安全)/i.test(input)
@@ -398,11 +629,12 @@ function legacyResultToGraphResult(
 export class AdvancedAnalysisService {
   private readonly logger = new Logger(AdvancedAnalysisService.name);
   /**
-   * 默认给完整图 8 秒，保证浏览器端不会长时间卡住。
-   * 可通过 CHAT_ANALYSIS_TIMEOUT_MS 调整；0 或负数表示不启用总时限。
+   * 默认给完整图 30 秒。多 Agent 图通常包含数次模型调用，8 秒会在模型
+   * 已经正常返回时被服务端提前截断。可通过 CHAT_ANALYSIS_TIMEOUT_MS 调整；
+   * 0 或负数表示不启用总时限。
    */
   private readonly analysisTimeoutMs = Number(
-    process.env["CHAT_ANALYSIS_TIMEOUT_MS"] ?? 8_000,
+    process.env["CHAT_ANALYSIS_TIMEOUT_MS"] ?? 30_000,
   );
   /** 向量模型首次加载可能访问外部模型仓库，因此检索单独设置较短预算。 */
   private readonly retrievalTimeoutMs = Number(
@@ -512,6 +744,66 @@ export class AdvancedAnalysisService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+    }
+
+    // 轻量请求不应进入检索和多 Agent 图：闲聊直接回复，短需求先澄清。
+    // 这也避免模型网关超时后把所有输入都误包装成同一份固定报告。
+    const keywordIntent = classifyIntentByKeywords(normalizedInput);
+    const hasLoginConversation = history.some(
+      (message) =>
+        message.getType() === "human" &&
+        /(登录|注册|鉴权|认证)/iu.test(contentToText(message.content)),
+    );
+    const shouldHandleOrderQuery =
+      keywordIntent === "query" &&
+      hasOrderQueryContext(normalizedInput, history);
+    const shouldUseQuickPath =
+      keywordIntent === "chat" ||
+      shouldHandleOrderQuery ||
+      (keywordIntent === "analyze" &&
+        (isBriefRequirement(normalizedInput) ||
+          (hasLoginConversation &&
+            isLoginClarificationAnswer(normalizedInput))) &&
+        !requestsFullAnalysis(normalizedInput));
+    if (shouldUseQuickPath) {
+      const quickResult =
+        keywordIntent === "chat"
+          ? localFallbackResult(normalizedInput, [])
+          : shouldHandleOrderQuery
+            ? createOrderQueryResult(normalizedInput, history)
+          : createBriefClarificationResult(normalizedInput, history);
+      const conclusion = analysisConclusion(quickResult);
+      try {
+        await withDeadline(
+          chatHistory.addMessage(new AIMessage(conclusion)),
+          Math.min(2_000, this.retrievalTimeoutMs),
+        );
+      } catch (error) {
+        this.logger.error(
+          `Assistant quick-path persistence failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      const clarificationQuestions = parseClarificationQuestions(
+        quickResult.clarified,
+      );
+      return {
+        report: null,
+        status:
+          keywordIntent === "analyze"
+            ? "clarification_required"
+            : "completed",
+        fallback: null,
+        intent: keywordIntent,
+        summary: conclusion,
+        clarificationQuestions,
+        usedAgents: [],
+        retrievedDocuments: [],
+        queryResponse: quickResult.queryResponse,
+        chatResponse: quickResult.chatResponse,
+        steps: quickResult.steps,
+      };
     }
 
     let retrievedDocuments: DocumentSearchResult[] = [];

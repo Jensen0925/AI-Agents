@@ -6,6 +6,7 @@ import { load } from "js-yaml";
 export interface LangchainConfig {
   llm: {
     model: string;
+    reasoningEffort: "medium" | "high";
     temperature: number;
     maxTokens: number;
     timeoutMs: number;
@@ -64,6 +65,19 @@ function readString(record: Record<string, unknown>, key: string): string {
     throw new Error(`LangChain config value "${key}" must be a non-empty string`);
   }
 
+  return value;
+}
+
+function readReasoningEffort(
+  record: Record<string, unknown>,
+  key: string,
+): "medium" | "high" {
+  const value = readString(record, key);
+  if (value !== "medium" && value !== "high") {
+    throw new Error(
+      `LangChain config value "${key}" must be either medium or high`,
+    );
+  }
   return value;
 }
 
@@ -151,6 +165,7 @@ export function loadLangchainConfig(): LangchainConfig {
   cachedConfig = {
     llm: {
       model: readString(llm, "model"),
+      reasoningEffort: readReasoningEffort(llm, "reasoningEffort"),
       temperature: readNumber(llm, "temperature"),
       maxTokens: readNumber(llm, "maxTokens"),
       timeoutMs: readNumber(llm, "timeoutMs"),

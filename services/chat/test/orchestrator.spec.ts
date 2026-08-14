@@ -343,4 +343,169 @@ describe("AdvancedAnalysisService", () => {
     expect(result.summary).toContain("## 技术复杂度");
     expect(addMessage.mock.calls[1]?.[2]).toContain("## 开发排期");
   });
+
+  it("answers casual chat without invoking retrieval or the analysis graph", async () => {
+    const runMock = runAnalysisGraph;
+    const addMessage = mock(async () => undefined);
+    const similaritySearch = mock(async () => []);
+    const service = new AdvancedAnalysisService(
+      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      {
+        getHistoryAsLangChainMessages: mock(async () => []),
+        addMessage,
+      } as unknown as MessageService,
+      { similaritySearch } as unknown as SearchService,
+    );
+
+    const result = await service.analyze(
+      "user-1",
+      "conversation-chat",
+      "你好，今天天气真不错",
+    );
+
+    expect(runMock).not.toHaveBeenCalled();
+    expect(similaritySearch).not.toHaveBeenCalled();
+    expect(result.intent).toBe("chat");
+    expect(result.report).toBeNull();
+    expect(result.summary).not.toContain("## 需求摘要");
+    expect(addMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks targeted questions for a brief login requirement", async () => {
+    const runMock = runAnalysisGraph;
+    const addMessage = mock(async () => undefined);
+    const similaritySearch = mock(async () => []);
+    const service = new AdvancedAnalysisService(
+      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      {
+        getHistoryAsLangChainMessages: mock(async () => []),
+        addMessage,
+      } as unknown as MessageService,
+      { similaritySearch } as unknown as SearchService,
+    );
+
+    const result = await service.analyze(
+      "user-1",
+      "conversation-login",
+      "我想做一个登录",
+    );
+
+    expect(runMock).not.toHaveBeenCalled();
+    expect(similaritySearch).not.toHaveBeenCalled();
+    expect(result.status).toBe("clarification_required");
+    expect(result.intent).toBe("analyze");
+    expect(result.report).toBeNull();
+    expect(result.summary).toContain("登录方式");
+    expect(result.summary).not.toContain("## 需求摘要");
+  });
+
+  it("advances login clarification from answers already stored in the same conversation", async () => {
+    const persisted: Array<HumanMessage | AIMessage> = [];
+    const addMessage = mock(
+      async (
+        _conversationId: string,
+        role: MessageRole,
+        content: string,
+      ) => {
+        persisted.push(
+          role === MessageRole.USER
+            ? new HumanMessage(content)
+            : new AIMessage(content),
+        );
+      },
+    );
+    const service = new AdvancedAnalysisService(
+      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      {
+        getHistoryAsLangChainMessages: mock(async () => [...persisted]),
+        addMessage,
+      } as unknown as MessageService,
+      { similaritySearch: mock(async () => []) } as unknown as SearchService,
+    );
+
+    const first = await service.analyze(
+      "user-1",
+      "conversation-login-flow",
+      "我想做一个登录页面",
+    );
+    const second = await service.analyze(
+      "user-1",
+      "conversation-login-flow",
+      "验证码登录",
+    );
+    const third = await service.analyze(
+      "user-1",
+      "conversation-login-flow",
+      "登录方式是账号密码",
+    );
+    const fourth = await service.analyze(
+      "user-1",
+      "conversation-login-flow",
+      "管理员和普通用户",
+    );
+
+    expect(first.summary).toContain("登录方式选哪一种");
+    expect(second.summary).toContain("已记录：登录方式：验证码登录");
+    expect(second.summary).toContain("用户角色有哪些");
+    expect(third.summary).toContain("已记录：登录方式：登录方式是账号密码");
+    expect(third.summary).toContain("用户角色有哪些");
+    expect(fourth.summary).toContain("用户角色：管理员和普通用户");
+    expect(fourth.summary).toContain("安全规则需要哪些");
+    expect(fourth.summary).not.toContain("登录方式选哪一种");
+    expect(runAnalysisGraph).not.toHaveBeenCalled();
+  });
+
+  it("explains the missing order data source and keeps query context on follow-up", async () => {
+    const persisted: Array<HumanMessage | AIMessage> = [];
+    const addMessage = mock(
+      async (
+        _conversationId: string,
+        role: MessageRole,
+        content: string,
+      ) => {
+        persisted.push(
+          role === MessageRole.USER
+            ? new HumanMessage(content)
+            : new AIMessage(content),
+        );
+      },
+    );
+    const similaritySearch = mock(async () => []);
+    const service = new AdvancedAnalysisService(
+      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      {
+        getHistoryAsLangChainMessages: mock(async () => [...persisted]),
+        addMessage,
+      } as unknown as MessageService,
+      { similaritySearch } as unknown as SearchService,
+    );
+
+    const identity = await service.analyze(
+      "user-1",
+      "conversation-order-flow",
+      "你好，你是什么模型",
+    );
+    const orderQuery = await service.analyze(
+      "user-1",
+      "conversation-order-flow",
+      "我想查询一下订单",
+    );
+    const followUp = await service.analyze(
+      "user-1",
+      "conversation-order-flow",
+      "为什么不能查询",
+    );
+
+    expect(identity.summary).toContain("底层模型由服务端当前的模型配置决定");
+    expect(orderQuery.status).toBe("completed");
+    expect(orderQuery.intent).toBe("query");
+    expect(orderQuery.summary).toContain("订单号");
+    expect(orderQuery.summary).toContain("没有接入真实订单数据源");
+    expect(orderQuery.summary).not.toContain("需求详情");
+    expect(followUp.summary).toContain("没有接入订单数据库或订单查询 API");
+    expect(followUp.summary).toContain("不能编造订单状态");
+    expect(followUp.summary).not.toContain("请稍后重试");
+    expect(runAnalysisGraph).not.toHaveBeenCalled();
+    expect(similaritySearch).not.toHaveBeenCalled();
+  });
 });
