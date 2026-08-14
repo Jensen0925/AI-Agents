@@ -314,8 +314,15 @@ function isBriefRequirement(input: string): boolean {
 }
 
 function isLoginClarificationAnswer(input: string): boolean {
-  return /^(?:账号.{0,3}密码|密码登录|手机号.{0,4}验证码|验证码登录|第三方登录|微信登录|钉钉登录|SSO|管理员.{0,12}|普通用户.{0,12}|访客.{0,12}|需要.{0,20}(?:验证码|锁定|找回密码|双因素|记住登录)|(?:首页|工作台|dashboard|会话有效期).{0,20})$/iu.test(
-    input.trim(),
+  const normalized = input.trim();
+
+  return (
+    /^(?:账号.{0,3}密码|密码登录|手机号.{0,4}验证码|验证码登录|第三方登录|微信登录|钉钉登录|SSO|管理员.{0,20}|普通用户.{0,20}|访客.{0,20}|需要.{0,40}(?:验证码|锁定|找回密码|双因素|记住登录))$/iu.test(
+      normalized,
+    ) ||
+    /(?:登录成功后|登录后).*(?:跳转|进入)|(?:跳转到|进入).*(?:首页|主页|工作台|dashboard)|(?:登录状态|会话有效期|登录有效期).*(?:保持|有效|分钟|小时|天)/iu.test(
+      normalized,
+    )
   );
 }
 
@@ -789,20 +796,29 @@ export class AdvancedAnalysisService {
         message.getType() === "human" &&
         /(登录|注册|鉴权|认证)/iu.test(contentToText(message.content)),
     );
+    // “登录状态需要保持 1 天”中的“状态”会被通用关键词分类器识别为查询。
+    // 在已经进入登录澄清流程时，合法回答必须继承 analyze 意图，避免误入
+    // 查询或完整 LangGraph 链路。
+    const isLoginFollowup =
+      hasLoginConversation &&
+      isLoginClarificationAnswer(normalizedInput) &&
+      !requestsFullAnalysis(normalizedInput);
+    const effectiveIntent: RequirementIntent = isLoginFollowup
+      ? "analyze"
+      : keywordIntent;
     const shouldHandleOrderQuery =
-      keywordIntent === "query" &&
+      effectiveIntent === "query" &&
       hasOrderQueryContext(normalizedInput, history);
     const shouldUseQuickPath =
-      keywordIntent === "chat" ||
+      effectiveIntent === "chat" ||
       shouldHandleOrderQuery ||
-      (keywordIntent === "analyze" &&
+      (effectiveIntent === "analyze" &&
         (isBriefRequirement(normalizedInput) ||
-          (hasLoginConversation &&
-            isLoginClarificationAnswer(normalizedInput))) &&
+          isLoginFollowup) &&
         !requestsFullAnalysis(normalizedInput));
     if (shouldUseQuickPath) {
       const quickResult =
-        keywordIntent === "chat"
+        effectiveIntent === "chat"
           ? localFallbackResult(normalizedInput, [])
           : shouldHandleOrderQuery
             ? createOrderQueryResult(normalizedInput, history)
@@ -826,11 +842,11 @@ export class AdvancedAnalysisService {
       return {
         report: null,
         status:
-          keywordIntent === "analyze"
+          effectiveIntent === "analyze"
             ? "clarification_required"
             : "completed",
         fallback: null,
-        intent: keywordIntent,
+        intent: effectiveIntent,
         summary: conclusion,
         clarificationQuestions,
         usedAgents: [],

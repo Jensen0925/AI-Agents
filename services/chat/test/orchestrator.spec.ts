@@ -483,6 +483,57 @@ describe("AdvancedAnalysisService", () => {
     expect(runAnalysisGraph).not.toHaveBeenCalled();
   });
 
+  it("keeps a complete login destination answer on the clarification path", async () => {
+    const persisted: Array<HumanMessage | AIMessage> = [];
+    const addMessage = mock(
+      async (
+        _conversationId: string,
+        role: MessageRole,
+        content: string,
+      ) => {
+        persisted.push(
+          role === MessageRole.USER
+            ? new HumanMessage(content)
+            : new AIMessage(content),
+        );
+      },
+    );
+    const search = mock(async () => []);
+    const service = new AdvancedAnalysisService(
+      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      {
+        getHistoryAsLangChainMessages: mock(async () => [...persisted]),
+        addMessage,
+      } as unknown as MessageService,
+      { search } as unknown as SearchService,
+    );
+
+    await service.analyze(
+      "user-1",
+      "conversation-sso-flow",
+      "我想做一个单点登录",
+    );
+    await service.analyze("user-1", "conversation-sso-flow", "sso");
+    await service.analyze("user-1", "conversation-sso-flow", "管理员");
+    await service.analyze(
+      "user-1",
+      "conversation-sso-flow",
+      "验证码保护、连续失败锁定、找回密码、",
+    );
+    const result = await service.analyze(
+      "user-1",
+      "conversation-sso-flow",
+      "登录成功后要跳转到主页 登录状态或会话有效期需要保持1天",
+    );
+
+    expect(result.status).toBe("clarification_required");
+    expect(result.intent).toBe("analyze");
+    expect(result.summary).toContain("登录后行为");
+    expect(result.summary).toContain("关键信息已齐全");
+    expect(runAnalysisGraph).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+  });
+
   it("explains the missing order data source and keeps query context on follow-up", async () => {
     const persisted: Array<HumanMessage | AIMessage> = [];
     const addMessage = mock(
