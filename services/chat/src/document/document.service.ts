@@ -8,7 +8,7 @@ import {
   UnsupportedMediaTypeException,
 } from "@nestjs/common";
 import { existsSync } from "node:fs";
-import { mkdir, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { PrismaService } from "../prisma/prisma.service";
 import { ChunkService } from "./chunk.service";
@@ -28,6 +28,13 @@ export interface UploadedDocumentFile {
   buffer: Buffer;
   mimetype: string;
   originalname: string;
+  size: number;
+}
+
+export interface DocumentPreview {
+  buffer: Buffer;
+  filename: string;
+  mimeType: string;
   size: number;
 }
 
@@ -134,6 +141,33 @@ export class DocumentService {
     }
 
     return document;
+  }
+
+  /** 校验文档归属与存储路径后读取原文件，供浏览器内联预览或下载。 */
+  async getPreview(
+    documentId: string,
+    userId: string,
+  ): Promise<DocumentPreview> {
+    const document = await this.findById(documentId, userId);
+    if (!document.filePath) {
+      throw new NotFoundException("Document file not found");
+    }
+
+    const absolutePath = this.resolveStoredPath(document.filePath);
+    try {
+      const buffer = await readFile(absolutePath);
+      return {
+        buffer,
+        filename: document.filename,
+        mimeType: document.mimeType,
+        size: document.size,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new NotFoundException("Document file not found");
+      }
+      throw error;
+    }
   }
 
   /** 校验文档归属后删除物理文件和数据库记录。 */

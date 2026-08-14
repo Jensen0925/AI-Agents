@@ -91,6 +91,83 @@ describe("DocumentService", () => {
       where: { id: "document-1" },
     });
   });
+
+  it("reads the original markdown file for an authorized preview", async () => {
+    const uploadRoot = await mkdtemp(join(tmpdir(), "cloudsage-preview-"));
+    temporaryDirectories.push(uploadRoot);
+    process.env["UPLOAD_DIR"] = uploadRoot;
+
+    let storedDocument: Document | undefined;
+    const prisma = {
+      document: {
+        create: mock(
+          async ({
+            data,
+          }: {
+            data: Omit<Document, "id" | "createdAt" | "chunkCount">;
+          }) => {
+            storedDocument = {
+              id: "document-preview",
+              chunkCount: 0,
+              createdAt: new Date(),
+              ...data,
+            };
+            return storedDocument;
+          },
+        ),
+        findFirst: mock(async () => storedDocument ?? null),
+      },
+    } as unknown as PrismaService;
+    const service = new DocumentService(prisma, {} as ChunkService);
+    const content = "# 登录需求\n\n支持账号密码登录。";
+
+    const document = await service.upload(
+      "user-1",
+      {
+        buffer: Buffer.from(content),
+        mimetype: "text/markdown",
+        originalname: "login.md",
+        size: Buffer.byteLength(content),
+      },
+      "login.md",
+    );
+    const preview = await service.getPreview(document.id, "user-1");
+
+    expect(preview.filename).toBe("login.md");
+    expect(preview.mimeType).toBe("text/markdown");
+    expect(preview.buffer.toString("utf8")).toBe(content);
+    expect(prisma.document.findFirst).toHaveBeenCalledWith({
+      where: { id: "document-preview", userId: "user-1" },
+    });
+  });
+
+  it("returns a clear error when a stored preview file is missing", async () => {
+    const uploadRoot = await mkdtemp(join(tmpdir(), "cloudsage-missing-"));
+    temporaryDirectories.push(uploadRoot);
+    process.env["UPLOAD_DIR"] = uploadRoot;
+
+    const prisma = {
+      document: {
+        findFirst: mock(async () => ({
+          id: "missing-document",
+          userId: "user-1",
+          filename: "missing.pdf",
+          mimeType: "application/pdf",
+          size: 10,
+          filePath: join(uploadRoot, "user-1", "missing.pdf"),
+          storageType: "local",
+          status: "pending",
+          chunkCount: 0,
+          createdAt: new Date(),
+        })),
+      },
+    } as unknown as PrismaService;
+    const service = new DocumentService(prisma, {} as ChunkService);
+
+    await expect(
+      service.getPreview("missing-document", "user-1"),
+    ).rejects.toThrow("Document file not found");
+  });
 });
 
 describe("DocumentController", () => {

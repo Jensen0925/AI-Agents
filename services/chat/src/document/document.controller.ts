@@ -9,12 +9,15 @@ import {
   Param,
   Post,
   Req,
+  Res,
+  StreamableFile,
   UnsupportedMediaTypeException,
   UploadedFile,
   UseGuards,
   UseInterceptors,
 } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import type { Response } from "express";
 import { memoryStorage } from "multer";
 import {
   type AuthenticatedRequest,
@@ -102,6 +105,32 @@ export class DocumentController {
   @Get()
   findByUser(@Req() request: AuthenticatedRequest) {
     return this.documentService.findByUser(currentUserId(request));
+  }
+
+  @Get(":id/preview")
+  async preview(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+    @Param("id") documentId: string,
+  ): Promise<StreamableFile> {
+    const preview = await this.documentService.getPreview(
+      requireId(documentId),
+      currentUserId(request),
+    );
+    const encodedFilename = encodeURIComponent(preview.filename).replace(
+      /['()]/g,
+      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+    );
+
+    response.set({
+      "Cache-Control": "private, no-store",
+      "Content-Disposition": `inline; filename*=UTF-8''${encodedFilename}`,
+      "Content-Length": String(preview.buffer.length),
+      "Content-Type": preview.mimeType,
+      "X-Content-Type-Options": "nosniff",
+    });
+
+    return new StreamableFile(preview.buffer);
   }
 
   @Get(":id")
