@@ -16,6 +16,7 @@ import {
 } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { z } from "zod";
+import { mcpManager } from "../../mcp/mcp-bootstrap";
 import {
   checkConflictsTool,
   searchRequirementTool,
@@ -196,6 +197,42 @@ export const COMPLIANCE_EXPERT_TOOLS = [
   searchRequirementTool,
   checkComplianceTool,
 ] satisfies StructuredToolInterface[];
+
+/** 返回领域本地工具；未知领域默认拒绝，MCP 连接失败时由这些工具兜底。 */
+export function getExpertTools(domain: string): StructuredToolInterface[] {
+  let localTools: StructuredToolInterface[];
+  switch (domain) {
+    case "functional":
+      localTools = [...FUNCTIONAL_EXPERT_TOOLS];
+      break;
+    case "performance":
+      localTools = [...PERFORMANCE_EXPERT_TOOLS];
+      break;
+    case "security":
+      localTools = [...SECURITY_EXPERT_TOOLS];
+      break;
+    case "compliance":
+      localTools = [...COMPLIANCE_EXPERT_TOOLS];
+      break;
+    default:
+      return [];
+  }
+
+  // MCP Manager 内部会按 intent、用户权限和连接状态裁剪工具。连接失败时返回空数组，
+  // 本地工具仍可完成专家的最小分析闭环。
+  try {
+    return [
+      ...localTools,
+      ...mcpManager.getTools({ intent: "analyze", userId: "system" }),
+    ];
+  } catch (error) {
+    console.warn(
+      "[AnalysisSupervisor] MCP tools unavailable; using local expert tools",
+      error instanceof Error ? error.message : error,
+    );
+    return localTools;
+  }
+}
 
 export const FUNCTIONAL_EXPERT_SYSTEM_PROMPT = `你是需求分析团队中的功能需求专家，负责把业务描述转化为可开发、可测试、可追踪的功能方案。
 
@@ -441,10 +478,17 @@ function createExpertOutputSchema(outputField: ExpertOutputField) {
 }
 
 function createExpertContext(state: ExpertSubGraphStateValue): string {
+  const context = state.retrievedContext?.trim();
+  const referenceBlock =
+    context &&
+    context !== DEFAULT_RETRIEVED_CONTEXT &&
+    context !== "无相关参考文档"
+      ? `## 参考资料（来自知识库检索）\n${context}\n请优先依据资料中的事实，不足处标记为待确认。`
+      : "";
   return [
     `用户原始需求：${getStateInput(state)}`,
     state.extracted ? `已抽取的需求字段：${state.extracted}` : "",
-    `知识库检索上下文：${state.retrievedContext || DEFAULT_RETRIEVED_CONTEXT}`,
+    referenceBlock,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -552,7 +596,7 @@ export function createExpertSubGraph(
 export function createFunctionalExpert(model: BaseChatModel) {
   return createExpertSubGraph(
     model,
-    FUNCTIONAL_EXPERT_TOOLS,
+    getExpertTools("functional"),
     FUNCTIONAL_EXPERT_SYSTEM_PROMPT,
     "functionalAnalysis",
     { name: "功能" },
@@ -562,7 +606,7 @@ export function createFunctionalExpert(model: BaseChatModel) {
 export function createPerformanceExpert(model: BaseChatModel) {
   return createExpertSubGraph(
     model,
-    PERFORMANCE_EXPERT_TOOLS,
+    getExpertTools("performance"),
     PERFORMANCE_EXPERT_SYSTEM_PROMPT,
     "performanceAnalysis",
     { name: "性能与可靠性" },
@@ -572,7 +616,7 @@ export function createPerformanceExpert(model: BaseChatModel) {
 export function createSecurityExpert(model: BaseChatModel) {
   return createExpertSubGraph(
     model,
-    SECURITY_EXPERT_TOOLS,
+    getExpertTools("security"),
     SECURITY_EXPERT_SYSTEM_PROMPT,
     "securityAnalysis",
     { name: "安全" },
@@ -582,7 +626,7 @@ export function createSecurityExpert(model: BaseChatModel) {
 export function createComplianceExpert(model: BaseChatModel) {
   return createExpertSubGraph(
     model,
-    COMPLIANCE_EXPERT_TOOLS,
+    getExpertTools("compliance"),
     COMPLIANCE_EXPERT_SYSTEM_PROMPT,
     "complianceAnalysis",
     { name: "合规与治理" },

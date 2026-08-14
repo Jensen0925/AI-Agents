@@ -174,6 +174,12 @@ export class MCPManager {
 
   private listRegisteredTools(): RegisteredTool[] {
     return this.registrations.flatMap((registration) => {
+      // 未建立连接的 Server 不能提供可调用工具。把它们排除在模型上下文外，
+      // 避免 Agent 选择一个必然失败的占位工具；连接中断后的直接调用仍由
+      // callTool 的 fallback 路径负责降级和审计。
+      if (!registration.client.isConnected()) {
+        return [];
+      }
       return registration.client
         .getTools()
         .filter((definition) => !registration.allowedTools || registration.allowedTools.includes(definition.name))
