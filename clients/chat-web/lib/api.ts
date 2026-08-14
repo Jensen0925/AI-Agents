@@ -1,6 +1,11 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { clearSession, getSession, saveSession, type Session } from "./auth";
 
+interface ApiErrorPayload {
+  message?: string;
+  traceId?: string;
+}
+
 /**
  * 所有浏览器端 API 请求统一设置超时，避免后端未启动、代理不可达或数据库连接卡住时页面永久等待。
  */
@@ -24,7 +29,7 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 api.interceptors.response.use(
   (response) => response,
-  async (error: AxiosError<{ message?: string }>) => {
+  async (error: AxiosError<ApiErrorPayload>) => {
     const status = error.response?.status;
     const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
     if (status === 403 && typeof window !== "undefined") {
@@ -59,13 +64,18 @@ api.interceptors.response.use(
 
 export function apiErrorMessage(error: unknown): string {
   if (error instanceof AxiosError) {
-    if (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT") {
+    const axiosError = error as AxiosError<ApiErrorPayload>;
+    if (axiosError.code === "ECONNABORTED" || axiosError.code === "ETIMEDOUT") {
       return "请求超时，请确认 Nest API（localhost:3001）和 PostgreSQL 正常运行";
     }
-    if (!error.response) {
+    if (!axiosError.response) {
       return "无法连接 Nest API，请确认 localhost:3001 已启动";
     }
-    return error.response.data?.message ?? error.message;
+    const message = axiosError.response.data?.message ?? axiosError.message;
+    const traceId =
+      axiosError.response.data?.traceId ??
+      String(axiosError.response.headers["x-trace-id"] ?? "").trim();
+    return traceId ? `${message}（追踪 ID：${traceId}）` : message;
   }
   return error instanceof Error ? error.message : "请求失败，请稍后重试";
 }
