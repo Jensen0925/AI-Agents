@@ -4,6 +4,8 @@ import { spawn } from 'node:child_process';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { ChatOpenAI } from '@langchain/openai';
 import { z } from 'zod';
+import { loadLangchainConfig } from '../src/config/load-langchain-config';
+import { normalizeChatBaseURL } from '../src/llm/normalize-base-url';
 
 type ReactAgent = {
   invoke(input: { messages: Array<{ role: string; content: string }> }): Promise<unknown>;
@@ -22,7 +24,6 @@ const { createReactAgent } = require('@langchain/langgraph/prebuilt') as {
 const ROOT_DIR = resolve(__dirname, '..');
 const ENV_PATH = resolve(ROOT_DIR, '.env');
 const SKILLS_DIR = resolve(ROOT_DIR, 'src/skills/definitions');
-const DEFAULT_MODEL = 'gpt-5.6-terra';
 
 function loadEnvFile(envPath: string): void {
   if (!existsSync(envPath)) {
@@ -63,8 +64,7 @@ function normalizeBaseUrl(baseURL?: string): string | undefined {
   if (!baseURL) {
     return undefined;
   }
-  const normalized = baseURL.replace(/\/+$/, '');
-  return /\/v\d+$/i.test(normalized) ? normalized : `${normalized}/v1`;
+  return normalizeChatBaseURL(baseURL);
 }
 
 function summarizeInput(payload: unknown): string {
@@ -204,7 +204,7 @@ async function run(): Promise<void> {
 
   const apiKey = requireEnv('OPENAI_API_KEY');
   const baseURL = normalizeBaseUrl(process.env.OPENAI_BASE_URL?.trim());
-  const modelName = process.env.SKILL_DEMO_MODEL?.trim() || DEFAULT_MODEL;
+  const modelName = process.env.SKILL_DEMO_MODEL?.trim() || loadLangchainConfig().llm.model;
 
   console.log('[Skills Demo] root:', ROOT_DIR);
   console.log('[Skills Demo] skills dir:', SKILLS_DIR);

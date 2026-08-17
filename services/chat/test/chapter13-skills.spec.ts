@@ -5,6 +5,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { ChatOpenAI } from '@langchain/openai';
 import { z } from 'zod';
+import { loadLangchainConfig } from '../src/config/load-langchain-config';
+import { normalizeChatBaseURL } from '../src/llm/normalize-base-url';
 
 type ReactAgent = {
   invoke(input: { messages: Array<{ role: string; content: string }> }): Promise<unknown>;
@@ -25,7 +27,6 @@ const ENV_PATH = resolve(CHAT_ROOT, '.env');
 const SKILLS_DIR = resolve(CHAT_ROOT, 'src/skills/definitions');
 const REQUIREMENT_SKILL_PATH = join(SKILLS_DIR, 'requirement-analysis', 'SKILL.md');
 const COMPETITOR_SKILL_PATH = join(SKILLS_DIR, 'competitor-research', 'SKILL.md');
-const DEFAULT_LLM_MODEL = 'gpt-5.6-terra';
 const invokedTools: string[] = [];
 
 function loadEnvFile(envPath: string): void {
@@ -58,8 +59,7 @@ function normalizeBaseUrl(baseURL?: string): string | undefined {
     return undefined;
   }
 
-  const normalized = baseURL.replace(/\/+$/, '');
-  return /\/v\d+$/i.test(normalized) ? normalized : `${normalized}/v1`;
+  return normalizeChatBaseURL(baseURL);
 }
 
 function runPythonScript(scriptPath: string, payload: Record<string, unknown>): string {
@@ -183,7 +183,7 @@ function createCompetitorAgentTools(): DynamicStructuredTool[] {
 function createRealAgent(tools: DynamicStructuredTool[], prompt: string): ReactAgent {
   const model = new ChatOpenAI({
     apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.LLM_SKILLS_TEST_MODEL?.trim() || DEFAULT_LLM_MODEL,
+    model: process.env.LLM_SKILLS_TEST_MODEL?.trim() || loadLangchainConfig().llm.model,
     temperature: 0,
     timeout: 60_000,
     maxRetries: 1,

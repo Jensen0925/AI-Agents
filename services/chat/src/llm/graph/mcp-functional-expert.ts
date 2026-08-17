@@ -1,5 +1,5 @@
 import { DynamicStructuredTool, tool, type StructuredToolInterface } from '@langchain/core/tools';
-import { ChatOpenAI } from '@langchain/openai';
+import { createChatModel } from '../model.factory';
 import { z } from 'zod';
 import {
   MCPManager,
@@ -88,11 +88,7 @@ export async function createMcpFunctionalExpert(
     loadPerfBaselineTool,
     ...mcpTools,
   ];
-  const llm = options.llm ?? new ChatOpenAI({
-    model: 'gpt-5.6-terra',
-    modelKwargs: { reasoning_effort: 'medium' },
-    temperature: 0,
-  });
+  const llm = options.llm ?? createChatModel({ tier: 'medium' });
   const agent = (options.createAgent ?? createReactAgent)({
     llm,
     tools: mergedTools,

@@ -6,6 +6,11 @@ import { load } from "js-yaml";
 export interface LangchainConfig {
   llm: {
     model: string;
+    modelTiers: {
+      high: string;
+      medium: string;
+      compressor: string;
+    };
     reasoningEffort: "medium" | "high";
     temperature: number;
     maxTokens: number;
@@ -180,6 +185,7 @@ export function loadLangchainConfig(): LangchainConfig {
   // 四个顶层分区必须同时存在，防止缺省配置悄悄改变运行行为。
   const { llm, retrieval, tools, features } = parsed;
   assertRecord(llm, "llm");
+  assertRecord(llm.modelTiers, "llm.modelTiers");
   assertRecord(retrieval, "retrieval");
   assertRecord(tools, "tools");
   assertRecord(features, "features");
@@ -187,6 +193,11 @@ export function loadLangchainConfig(): LangchainConfig {
   cachedConfig = {
     llm: {
       model: readString(llm, "model"),
+      modelTiers: {
+        high: readString(llm.modelTiers, "high"),
+        medium: readString(llm.modelTiers, "medium"),
+        compressor: readString(llm.modelTiers, "compressor"),
+      },
       reasoningEffort: readReasoningEffort(llm, "reasoningEffort"),
       temperature: readNumber(llm, "temperature"),
       maxTokens: readNumber(llm, "maxTokens"),
