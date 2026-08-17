@@ -81,7 +81,7 @@ async function createMcpAgentTools() {
 function createRealAgent(tools: ReturnType<typeof bridgeMCPToLangChain>): ReactAgent {
   const model = new ChatOpenAI({
     apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.OPENAI_MODEL ?? 'gpt-5.6-terra',
+    model: process.env.OPENAI_MODEL ?? 'deepseek-v4-pro',
     modelKwargs: { reasoning_effort: 'high' },
     temperature: 0,
     timeout: 60_000,

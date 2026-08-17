@@ -24,18 +24,19 @@ export interface AgentModelSet {
 }
 
 export const DEFAULT_AGENT_MODEL_SET: AgentModelSet = {
-  supervisorModelConfigId: "demo-gpt-5.6-terra",
-  functionalModelConfigId: "demo-gpt-5.6-terra",
-  performanceModelConfigId: "demo-gpt-5.6-terra",
-  securityModelConfigId: "demo-gpt-5.6-terra",
-  complianceModelConfigId: "demo-gpt-5.6-terra",
-  riskModelConfigId: "demo-gpt-5.6-terra",
-  summaryModelConfigId: "demo-gpt-5.6-terra",
-  criticModelConfigId: "demo-gpt-5.6-terra",
-  compressorModelConfigId: "demo-gpt-5.6-terra",
+  supervisorModelConfigId: "demo-deepseek-v4-pro",
+  functionalModelConfigId: "demo-deepseek-v4-flash",
+  performanceModelConfigId: "demo-deepseek-v4-flash",
+  securityModelConfigId: "demo-deepseek-v4-pro",
+  complianceModelConfigId: "demo-deepseek-v4-pro",
+  riskModelConfigId: "demo-deepseek-v4-pro",
+  summaryModelConfigId: "demo-deepseek-v4-pro",
+  criticModelConfigId: "demo-deepseek-v4-pro",
+  compressorModelConfigId: "demo-deepseek-v4-flash",
 };
 
-/** 同一 Terra 模型按节点风险区分推理强度，不再切换到其他模型。 */
+/** 高风险节点使用 Pro，轻量/省钱节点使用 Flash，按节点角色分档。
+ * 实际发送给网关的模型名由 config/langchain.yaml 的 llm.model/modelTiers 决定，此处为成本台账配置 ID。 */
 export const AGENT_REASONING_EFFORT: Record<AgentName, "medium" | "high"> = {
   supervisor: "high",
   functional_expert: "medium",

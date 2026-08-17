@@ -34,21 +34,21 @@ describe("chapter 10 token economics estimator", () => {
     expect(estimateTextTokens("abcde")).toBe(2);
   });
 
-  it("falls back to gpt-5.6-terra for unknown models", () => {
-    expect(getModelPricing("unknown-model")).toEqual(getModelPricing("gpt-5.6-terra"));
+  it("falls back to deepseek-v4-pro for unknown models", () => {
+    expect(getModelPricing("unknown-model")).toEqual(getModelPricing("deepseek-v4-pro"));
   });
 
   it("charges tool schemas as part of input context", () => {
     const base = estimateGraphNodeCost({
       nodeName: "analysis",
-      modelName: "gpt-5.6-terra",
+      modelName: "deepseek-v4-pro",
       systemPrompt: "分析需求",
       messages: ["开发登录功能"],
       outputText: "分析结果",
     });
     const withTools = estimateGraphNodeCost({
       nodeName: "analysis",
-      modelName: "gpt-5.6-terra",
+      modelName: "deepseek-v4-pro",
       systemPrompt: "分析需求",
       toolSchemas: { name: "search_requirement", schema: { reqId: "string" } },
       messages: ["开发登录功能"],
@@ -61,11 +61,11 @@ describe("chapter 10 token economics estimator", () => {
   it("uses output pricing for generated output tokens", () => {
     const estimate = estimateGraphNodeCost({
       nodeName: "summary",
-      modelName: "gpt-5.6-terra",
+      modelName: "deepseek-v4-pro",
       systemPrompt: "",
       outputText: "abcdefgh",
     });
-    const expected = (2 * getModelPricing("gpt-5.6-terra").output) / 1_000_000;
+    const expected = (2 * getModelPricing("deepseek-v4-pro").output) / 1_000_000;
     expect(estimate.outputTokens).toBe(2);
     expect(estimate.estimatedCostUsd).toBe(expected);
   });
@@ -124,24 +124,23 @@ describe("10.5.2 conversation-compressor", () => {
 });
 
 describe("10.9.1 AgentModelSet", () => {
-  it("uses Terra for every role and differentiates medium/high reasoning", () => {
-    for (const modelConfigId of Object.values(DEFAULT_AGENT_MODEL_SET)) {
-      expect(modelConfigId).toBe("demo-gpt-5.6-terra");
-    }
+  it("assigns pro to high reasoning roles and flash to medium roles", () => {
+    expect(DEFAULT_AGENT_MODEL_SET.supervisorModelConfigId).toBe("demo-deepseek-v4-pro");
+    expect(DEFAULT_AGENT_MODEL_SET.functionalModelConfigId).toBe("demo-deepseek-v4-flash");
     expect(AGENT_REASONING_EFFORT.functional_expert).toBe("medium");
     expect(AGENT_REASONING_EFFORT.supervisor).toBe("high");
   });
 
-  it("assigns all five high-risk roles to demo-gpt-5.6-terra by default", () => {
+  it("assigns all five high-risk roles to demo-deepseek-v4-pro by default", () => {
     expect(HIGH_RISK_AGENTS).toHaveLength(5);
     for (const agentName of HIGH_RISK_AGENTS) {
-      expect(resolveModelForAgent({ agentName }).selectedModelConfigId).toBe("demo-gpt-5.6-terra");
+      expect(resolveModelForAgent({ agentName }).selectedModelConfigId).toBe("demo-deepseek-v4-pro");
     }
   });
 
-  it("reduces reasoning to medium for low complexity without changing Terra", () => {
+  it("downgrades functional to flash for low complexity", () => {
     const result = resolveModelForAgent({ agentName: "functional_expert", requirementComplexity: "low" });
-    expect(result.selectedModelConfigId).toBe("demo-gpt-5.6-terra");
+    expect(result.selectedModelConfigId).toBe("demo-deepseek-v4-flash");
     expect(result.reasoningEffort).toBe("medium");
     expect(result.overrideReason).toContain("low_complexity");
   });
@@ -150,7 +149,7 @@ describe("10.9.1 AgentModelSet", () => {
 describe("10.9.2 runtime model overrides", () => {
   it("keeps the default model below the budget warning threshold", () => {
     const result = resolveModelForAgent({ agentName: "functional_expert", budgetStatus: { usedPercent: 79 } });
-    expect(result.selectedModelConfigId).toBe("demo-gpt-5.6-terra");
+    expect(result.selectedModelConfigId).toBe("demo-deepseek-v4-flash");
     expect(result.reasoningEffort).toBe("medium");
     expect(result.overrideReason).toBeNull();
   });
@@ -158,23 +157,23 @@ describe("10.9.2 runtime model overrides", () => {
   it("downgrades functional at 85% budget but protects security at 90%", () => {
     const functional = resolveModelForAgent({ agentName: "functional_expert", budgetStatus: { usedPercent: 85 } });
     const security = resolveModelForAgent({ agentName: "security_expert", budgetStatus: { usedPercent: 90 } });
-    expect(functional.selectedModelConfigId).toBe("demo-gpt-5.6-terra");
+    expect(functional.selectedModelConfigId).toBe("demo-deepseek-v4-flash");
     expect(functional.reasoningEffort).toBe("medium");
     expect(functional.overrideReason).toContain("budget_tight_downgrade");
-    expect(security.selectedModelConfigId).toBe("demo-gpt-5.6-terra");
+    expect(security.selectedModelConfigId).toBe("demo-deepseek-v4-pro");
     expect(security.reasoningEffort).toBe("high");
     expect(security.overrideReason).toBeNull();
   });
 
   it("rejects non-compressor agents after budget exhaustion", () => {
     const result = resolveModelForAgent({ agentName: "risk_agent", budgetStatus: { usedPercent: 110 } });
-    expect(result.selectedModelConfigId).toBe("demo-gpt-5.6-terra");
+    expect(result.selectedModelConfigId).toBe("demo-deepseek-v4-pro");
     expect(result.overrideReason).toBe("budget_exceeded_reject");
   });
 
   it("exempts compressor after budget exhaustion", () => {
     const result = resolveModelForAgent({ agentName: "compressor", budgetStatus: { usedPercent: 110 } });
-    expect(result.selectedModelConfigId).toBe("demo-gpt-5.6-terra");
+    expect(result.selectedModelConfigId).toBe("demo-deepseek-v4-flash");
     expect(result.reasoningEffort).toBe("medium");
     expect(result.overrideReason).toBeNull();
   });
@@ -218,8 +217,8 @@ describe("10.8.2 TokenUsageService", () => {
       graphName: "requirement-analysis",
       nodeName: "functional",
       agentName: "functional_expert",
-      modelConfigId: "demo-gpt-5.6-terra",
-      modelName: "gpt-5.6-terra",
+      modelConfigId: "demo-deepseek-v4-pro",
+      modelName: "deepseek-v4-pro",
       inputTokens: 100,
       outputTokens: 20,
       cachedInputTokens: 10,
@@ -295,7 +294,7 @@ describe("10.8.2 TokenUsageService", () => {
         graphName: "graph",
         nodeName: "node",
         agentName: "agent",
-        modelName: "gpt-5.6-terra",
+        modelName: "deepseek-v4-pro",
       }),
     ).resolves.toBeUndefined();
   });
@@ -317,7 +316,7 @@ describe("10.8.3 withTokenUsage", () => {
     };
     expect(
       await withTokenUsage(
-        { graphName: "graph", nodeName: "summary", agentName: "summary_agent", modelName: "gpt-5.6-terra" },
+        { graphName: "graph", nodeName: "summary", agentName: "summary_agent", modelName: "deepseek-v4-pro" },
         { recordUsage } as never,
         async () => response,
       ),
@@ -337,7 +336,7 @@ describe("10.8.3 withTokenUsage", () => {
     const recordUsage = mock(async () => undefined);
     const response = { content: "abcdefgh" };
     await withTokenUsage(
-      { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "gpt-5.6-terra" },
+      { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "deepseek-v4-pro" },
       { recordUsage } as never,
       async () => response,
     );
@@ -359,7 +358,7 @@ describe("10.8.3 withTokenUsage", () => {
     });
     expect(
       await withTokenUsage(
-        { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "gpt-5.6-terra" },
+        { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "deepseek-v4-pro" },
         { recordUsage } as never,
         async () => response,
       ),
@@ -370,7 +369,7 @@ describe("10.8.3 withTokenUsage", () => {
     const response = { content: "无采集服务" };
     expect(
       await withTokenUsage(
-        { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "gpt-5.6-terra" },
+        { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "deepseek-v4-pro" },
         null,
         async () => response,
       ),

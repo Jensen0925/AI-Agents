@@ -31,13 +31,13 @@ export interface GraphNodeCostEstimate {
 
 /** 示例价格，单位为 USD / 1M tokens；上线前请以厂商官网最新报价为准。 */
 export const PRICING: Record<string, ModelPricing> = {
-  "gpt-5.6-terra": { input: 2.5, output: 10, cachedInput: 1.25 },
+  "deepseek-v4-pro": { input: 2.5, output: 10, cachedInput: 1.25 },
   "claude-sonnet": { input: 3, output: 15, cachedInput: 0.3 },
   "claude-haiku": { input: 0.8, output: 4, cachedInput: 0.08 },
-  "deepseek-chat": { input: 0.27, output: 1.1 },
+  "deepseek-v4-flash": { input: 0.27, output: 1.1 },
 };
 
-const DEFAULT_MODEL = "gpt-5.6-terra";
+const DEFAULT_MODEL = "deepseek-v4-pro";
 
 function stringifyForEstimation(value: unknown): string {
   if (value == null) return "";
@@ -73,7 +73,7 @@ export function estimateTextTokens(text: string | null | undefined): number {
   return chineseTokens + Math.ceil(otherCharacters / 4);
 }
 
-/** 获取模型价格；未知模型统一回退到 gpt-5.6-terra。 */
+/** 获取模型价格；未知模型统一回退到 deepseek-v4-pro。 */
 export function getModelPricing(modelName: string): ModelPricing {
   const normalized = modelName.trim().toLowerCase();
   return PRICING[normalized] ?? PRICING[DEFAULT_MODEL];
