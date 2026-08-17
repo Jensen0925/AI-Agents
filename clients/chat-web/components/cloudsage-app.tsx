@@ -19,6 +19,7 @@ import {
 } from "@/lib/knowledge-data"
 import { Sidebar, type SidebarConversation } from "@/components/sidebar"
 import { DocumentsView } from "@/components/documents-view"
+import { DocumentPreviewDialog } from "@/components/document-preview-dialog"
 import { ChatView } from "@/components/chat-view"
 
 type View = "documents" | "chat"
@@ -37,6 +38,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
   const [documentsLoading, setDocumentsLoading] = useState(true)
   const [documentsError, setDocumentsError] = useState("")
   const [uploading, setUploading] = useState(false)
+  const [previewDocument, setPreviewDocument] = useState<KnowledgeDoc | null>(null)
   const [newConversationSignal, setNewConversationSignal] = useState(0)
   const [conversations, setConversations] = useState<SidebarConversation[]>([])
   const [pinnedConversationIds, setPinnedConversationIds] = useState<string[]>([])
@@ -163,6 +165,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
     if (!window.confirm(`确认删除文档“${document.title}”？`)) return
     try {
       await api.delete(`/documents/${document.id}`)
+      if (previewDocument?.id === document.id) setPreviewDocument(null)
       setDocuments((current) => current.filter((item) => item.id !== document.id))
     } catch (reason) {
       setDocumentsError(apiErrorMessage(reason))
@@ -301,6 +304,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
             onUpload={uploadDocument}
             onProcess={processDocument}
             onDelete={deleteDocument}
+            onPreview={setPreviewDocument}
           />
         ) : (
           <ChatView
@@ -312,6 +316,14 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
           />
         )}
       </div>
+      <DocumentPreviewDialog
+        document={previewDocument}
+        open={previewDocument !== null}
+        demo={demo}
+        onOpenChange={(open) => {
+          if (!open) setPreviewDocument(null)
+        }}
+      />
     </main>
   )
 }

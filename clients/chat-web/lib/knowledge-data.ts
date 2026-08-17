@@ -14,6 +14,7 @@ export type KnowledgeDoc = {
   rawStatus?: string
   chunkCount?: number
   createdAt?: string
+  mimeType?: string
 }
 
 export type Category = {
@@ -106,6 +107,7 @@ export function mapDocumentRecord(record: DocumentRecord): KnowledgeDoc {
     rawStatus: record.status,
     chunkCount: record.chunkCount,
     createdAt: record.createdAt,
+    mimeType: record.mimeType,
   }
 }
 

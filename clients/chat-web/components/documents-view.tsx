@@ -8,6 +8,7 @@ import {
   FileSpreadsheet,
   FileText,
   Globe,
+  Eye,
   LayoutGrid,
   List,
   Loader2,
@@ -43,6 +44,7 @@ type DocumentsViewProps = {
   onUpload: (file: File) => Promise<void>
   onProcess: (document: KnowledgeDoc) => Promise<void>
   onDelete: (document: KnowledgeDoc) => Promise<void>
+  onPreview: (document: KnowledgeDoc) => void
 }
 
 export function DocumentsView({
@@ -56,6 +58,7 @@ export function DocumentsView({
   onUpload,
   onProcess,
   onDelete,
+  onPreview,
 }: DocumentsViewProps) {
   const [query, setQuery] = useState("")
   const [layout, setLayout] = useState<"grid" | "list">("grid")
@@ -186,13 +189,13 @@ export function DocumentsView({
         ) : layout === "grid" ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {filtered.map((document) => (
-              <DocCard key={document.id} document={document} onProcess={onProcess} onDelete={onDelete} />
+              <DocCard key={document.id} document={document} onProcess={onProcess} onDelete={onDelete} onPreview={onPreview} />
             ))}
           </div>
         ) : (
           <div className="flex flex-col gap-2">
             {filtered.map((document) => (
-              <DocRow key={document.id} document={document} onProcess={onProcess} onDelete={onDelete} />
+              <DocRow key={document.id} document={document} onProcess={onProcess} onDelete={onDelete} onPreview={onPreview} />
             ))}
           </div>
         )}
@@ -205,12 +208,25 @@ type DocumentActions = {
   document: KnowledgeDoc
   onProcess: (document: KnowledgeDoc) => Promise<void>
   onDelete: (document: KnowledgeDoc) => Promise<void>
+  onPreview: (document: KnowledgeDoc) => void
 }
 
-function ActionButtons({ document, onProcess, onDelete }: DocumentActions) {
+function ActionButtons({ document, onProcess, onDelete, onPreview }: DocumentActions) {
   const processing = document.rawStatus === "processing"
   return (
     <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          onPreview(document)
+        }}
+        className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        title="预览文档"
+        aria-label="预览文档"
+      >
+        <Eye className="size-3.5" />
+      </button>
       <button
         type="button"
         disabled={processing}
@@ -243,7 +259,22 @@ function ActionButtons({ document, onProcess, onDelete }: DocumentActions) {
 function DocCard(props: DocumentActions) {
   const { document } = props
   return (
-    <article className="group flex cursor-pointer flex-col rounded-2xl border border-border bg-card p-5 transition-all hover:border-ring/40 hover:shadow-sm">
+    <article
+      role="button"
+      tabIndex={0}
+      aria-label={`预览文档 ${document.title}`}
+      onClick={() => props.onPreview(document)}
+      onKeyDown={(event) => {
+        if (
+          event.target === event.currentTarget &&
+          (event.key === "Enter" || event.key === " ")
+        ) {
+          event.preventDefault()
+          props.onPreview(document)
+        }
+      }}
+      className="group flex cursor-pointer flex-col rounded-2xl border border-border bg-card p-5 transition-all hover:border-ring/40 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-ring/50"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="flex size-10 items-center justify-center rounded-xl bg-accent text-accent-foreground">
           {typeIcon[document.type]}
@@ -277,7 +308,22 @@ function DocCard(props: DocumentActions) {
 function DocRow(props: DocumentActions) {
   const { document } = props
   return (
-    <article className="group flex cursor-pointer items-center gap-4 rounded-xl border border-border bg-card px-4 py-3 transition-all hover:border-ring/40 hover:shadow-sm">
+    <article
+      role="button"
+      tabIndex={0}
+      aria-label={`预览文档 ${document.title}`}
+      onClick={() => props.onPreview(document)}
+      onKeyDown={(event) => {
+        if (
+          event.target === event.currentTarget &&
+          (event.key === "Enter" || event.key === " ")
+        ) {
+          event.preventDefault()
+          props.onPreview(document)
+        }
+      }}
+      className="group flex cursor-pointer items-center gap-4 rounded-xl border border-border bg-card px-4 py-3 transition-all hover:border-ring/40 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-ring/50"
+    >
       <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground">
         {typeIcon[document.type]}
       </div>
