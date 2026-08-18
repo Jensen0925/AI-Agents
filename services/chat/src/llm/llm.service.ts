@@ -128,7 +128,6 @@ export class LlmService {
   async invoke(): Promise<InvokeResult> {
     const messages = await this.createMessages();
     const response = await this.getModel().invoke(messages);
-    console.log("LangChain invoke response:", response);
 
     return {
       input: LANGCHAIN_USER_INPUT,

@@ -6,7 +6,8 @@ llm:
     compressor: deepseek-v4-flash
   reasoningEffort: high
   temperature: 0
-  maxTokens: 1024
+  # 综合分析报告包含多专家结论、风险和排期，1024 容易截断末尾章节。
+  maxTokens: 2048
   timeoutMs: 30000
   maxRetries: 2
   batchSize: 2

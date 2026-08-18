@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "dev": "turbo dev",
+    "test": "turbo test",
     "dev:chat-web": "turbo dev --filter=@cloudsage/chat-web",
     "dev:admin-web": "turbo dev --filter=@cloudsage/admin-web",
     "dev:chat": "turbo dev --filter=@cloudsage/chat",
