@@ -24,12 +24,15 @@ import {
   type RequirementIntent,
   type RunAnalysisGraphOutput,
 } from "./graph/requirement-analysis-graph";
+import type { ExpertModelSelector } from "./graph/experts";
 import { runAnalysisGraph } from "./graph/analysis-graph.runner";
 import { createChatModel } from "./model.factory";
 import { createDeepOrchestrator } from "./deepagent/deep-orchestrator.service";
 import { detectLongChain } from "./agents/orchestrator.service";
 import { ArtifactService } from "../artifact/artifact.service";
 import { createConversationTitle } from "../conversation/conversation-title";
+import { PrismaService } from "../prisma/prisma.service";
+import { TokenUsageService } from "./cost/token-usage.service";
 
 export interface AdvancedAnalysisResult {
   report: string | null;
@@ -140,6 +143,16 @@ function normalizeDocuments(value: unknown): DocumentSearchResult[] {
     return [{ content: record.content, score: Number.isFinite(score) ? score : 0 }];
   });
 }
+
+/**
+ * 预算策略只在图外选择模型实例。图节点继续依赖注入的 model，避免把环境
+ * 配置、模型构造和业务推理混在一起；高风险角色不会得到 downgrade 动作。
+ */
+const selectBudgetExpertModel: ExpertModelSelector = (_agentName, action) => {
+  return action === "downgrade"
+    ? createChatModel({ tier: "compressor" })
+    : createChatModel();
+};
 
 /**
  * LangGraph/旧编排都属于外部模型边界，不能假定第三方实现一定返回完整对象。
@@ -668,6 +681,7 @@ function legacyResultToGraphResult(
 @Injectable()
 export class AdvancedAnalysisService {
   private readonly logger = new Logger(AdvancedAnalysisService.name);
+  private readonly tokenUsageService?: TokenUsageService;
   /**
    * 默认给完整图 30 秒。多 Agent 图通常包含数次模型调用，8 秒会在模型
    * 已经正常返回时被服务端提前截断。可通过 CHAT_ANALYSIS_TIMEOUT_MS 调整；
@@ -688,7 +702,11 @@ export class AdvancedAnalysisService {
     private readonly searchService: SearchService,
     /** 报告工件是可选增强能力，归档失败不能影响用户本轮聊天。 */
     private readonly artifactService?: ArtifactService,
-  ) {}
+    /** 成本持久化是旁路能力，缺失时仍可运行完整需求分析。 */
+    prisma?: PrismaService,
+  ) {
+    this.tokenUsageService = prisma ? new TokenUsageService(prisma) : undefined;
+  }
 
   /**
    * 使用已有历史与当前用户知识库增强本轮输入，执行分析后将问答写回消息表。
@@ -985,7 +1003,12 @@ export class AdvancedAnalysisService {
     let usedLocalFallback = false;
     try {
       graphResult = await withDeadline(
-        runAnalysisGraph(normalizedInput, context),
+        runAnalysisGraph(normalizedInput, context, {
+          userId,
+          sessionId: conversationId,
+          usageService: this.tokenUsageService,
+          expertModelSelector: selectBudgetExpertModel,
+        }),
         this.analysisTimeoutMs,
       );
     } catch (error) {

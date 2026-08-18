@@ -24,10 +24,13 @@ import {
   summaryAgent,
 } from "../agents/sub-agents";
 import { createChatModel } from "../model.factory";
+import type { TokenUsageService } from "../cost/token-usage.service";
 import { analysisTools } from "./analysis-tools";
 import {
   createAnalysisSupervisorSubGraph,
   EXPERT_NODE_BY_NAME,
+  type AnalysisUsageContext,
+  type ExpertModelSelector,
   type ExpertName,
 } from "./experts";
 
@@ -234,6 +237,12 @@ type ChatModel = BaseChatModel;
 /** 运行图时的可选持久化配置；省略时保持原先的无状态行为。 */
 export interface AnalysisGraphOptions {
   checkpointer?: BaseCheckpointSaver;
+  /** 观测侧路；未注入时图的业务行为与历史版本完全一致。 */
+  usageService?: TokenUsageService;
+  /** 关联本次图运行的会话与 LangGraph 线程，供 usage 记录追踪。 */
+  usageContext?: AnalysisUsageContext;
+  /** 预算紧张时选择专家降级模型；由图外部注入，节点不直接创建模型。 */
+  expertModelSelector?: ExpertModelSelector;
 }
 
 /** LangGraph 持久化线程的统一命名，避免用户和会话之间发生状态串扰。 */
@@ -1182,7 +1191,12 @@ export function createAnalysisGraph(
 ) {
   // 第九章 9.2：主图拓扑保持不变，只替换 analysisStep 的内部实现。
   // 原 createAnalysisSubGraph() 仍保留，可用于第八章 ReAct 版本对比和回归测试。
-  const analysisSupervisorSubGraph = createAnalysisSupervisorSubGraph(model);
+  const analysisSupervisorSubGraph = createAnalysisSupervisorSubGraph(
+    model,
+    options.usageService,
+    options.usageContext,
+    options.expertModelSelector,
+  );
 
   return new StateGraph(RequirementAnalysisState)
     .addNode("classifier", createClassifierNode(model))
@@ -1281,6 +1295,8 @@ export async function runAnalysisGraph(
     userId?: string;
     sessionId?: string;
     checkpointer?: BaseCheckpointSaver;
+    usageService?: TokenUsageService;
+    expertModelSelector?: ExpertModelSelector;
   } = {},
 ): Promise<RunAnalysisGraphOutput> {
   const checkpointer =
@@ -1290,6 +1306,15 @@ export async function runAnalysisGraph(
       : undefined);
   const graph = createAnalysisGraph(options.model ?? createChatModel(), {
     checkpointer,
+    usageService: options.usageService,
+    usageContext: {
+      conversationId: options.sessionId,
+      threadId:
+        options.userId && options.sessionId
+          ? createAnalysisThreadId(options.userId, options.sessionId)
+          : undefined,
+    },
+    expertModelSelector: options.expertModelSelector,
   });
   const threadId =
     options.userId && options.sessionId

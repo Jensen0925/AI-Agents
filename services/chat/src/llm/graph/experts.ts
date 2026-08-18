@@ -17,6 +17,13 @@ import {
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import { z } from "zod";
 import { mcpManager } from "../../mcp/mcp-bootstrap";
+import type { AgentName } from "../cost/agent-model-set";
+import {
+  resolveBudgetAction,
+  type BudgetAction,
+} from "../cost/budget-policy";
+import { withTokenUsage } from "../cost/with-token-usage";
+import type { TokenUsageService } from "../cost/token-usage.service";
 import {
   checkConflictsTool,
   searchRequirementTool,
@@ -54,6 +61,20 @@ export const MAX_EXPERT_STEPS = 6;
 /** 兼容旧调用方的别名。 */
 export const MAX_EXPERT_TOOL_LOOPS = MAX_EXPERT_STEPS;
 const DEFAULT_RETRIEVED_CONTEXT = "当前知识库没有检索到相关资料。";
+
+export interface AnalysisUsageContext {
+  conversationId?: string;
+  threadId?: string;
+}
+
+/**
+ * 由图工厂提供的模型选择器。专家节点本身不创建模型，既便于测试注入，
+ * 也让环境配置继续集中在 model.factory.ts。
+ */
+export type ExpertModelSelector = (
+  agentName: AgentName,
+  action: BudgetAction,
+) => BaseChatModel;
 
 /**
  * 性能专家的本地评估工具。
@@ -505,7 +526,13 @@ export function createExpertSubGraph(
   tools: StructuredToolInterface[],
   systemPrompt: string,
   outputField: ExpertOutputField,
-  opts: { name: string } = { name: outputField },
+  opts: {
+    name: string;
+    agentName?: AgentName;
+    usageService?: TokenUsageService;
+    usageContext?: AnalysisUsageContext;
+    modelSelector?: ExpertModelSelector;
+  } = { name: outputField },
 ): CompiledStateGraph<any, any, any> {
   const toolNode = new ToolNode(tools);
 
@@ -519,17 +546,87 @@ export function createExpertSubGraph(
     ];
 
     try {
+      let budgetAction: BudgetAction = "allow";
+      let budgetOverrideReason: string | null = null;
+      if (opts.usageService) {
+        const monthlyBudget = Number(process.env.MONTHLY_BUDGET_USD ?? 0);
+        if (monthlyBudget > 0) {
+          try {
+            const monthly = await opts.usageService.getMonthlyStats();
+            const usedPercent = (monthly.totalCost / monthlyBudget) * 100;
+            const budget = resolveBudgetAction({
+              budgetUsedPercent: usedPercent,
+              agentName: opts.agentName ?? opts.name,
+            });
+            budgetAction = budget.action;
+            budgetOverrideReason =
+              budget.action === "downgrade" ? budget.reason : null;
+            if (budget.action === "reject") {
+              const fallback = `[${opts.name} 专家预算已超限：${budget.reason}] 本项分析已跳过，建议人工补充。`;
+              return {
+                messages: [new AIMessage(fallback)],
+                [outputField]: fallback,
+              } as Partial<ExpertSubGraphStateValue>;
+            }
+          } catch (error) {
+            // 预算统计是观测侧路。成本表尚未迁移或数据库短暂不可用时，
+            // 不能让用户的需求分析请求失败。
+            console.warn(
+              `[${opts.name} 专家] 预算统计不可用，已跳过本轮预算检查`,
+              error instanceof Error ? error.message : error,
+            );
+          }
+        }
+      }
+
+      let selectedModel = model;
+      if (budgetAction === "downgrade" && opts.agentName && opts.modelSelector) {
+        try {
+          selectedModel = opts.modelSelector(opts.agentName, budgetAction);
+        } catch (error) {
+          // 模型选择器属于成本优化，发生异常时继续使用默认模型而不是丢弃分析。
+          console.warn(
+            `[${opts.name} 专家] 降级模型不可用，已继续使用默认模型`,
+            error instanceof Error ? error.message : error,
+          );
+          budgetOverrideReason = null;
+        }
+      }
+
+      const modelName = String(
+        (selectedModel as unknown as { modelName?: unknown; model?: unknown })
+          .modelName ??
+          (selectedModel as unknown as { model?: unknown }).model ??
+          "unknown",
+      );
+      const invoke = () =>
+        state.expertToolLoopCount >= MAX_EXPERT_STEPS || !selectedModel.bindTools
+          ? selectedModel.invoke([
+              new SystemMessage(
+                `${systemPrompt}\n\n当前必须直接给出最终专家结论，不再调用任何工具。`,
+              ),
+              new HumanMessage(createExpertContext(state)),
+              ...state.messages,
+            ])
+          : selectedModel.bindTools(tools).invoke(messages);
+
       let response: BaseMessage;
-      if (state.expertToolLoopCount >= MAX_EXPERT_STEPS || !model.bindTools) {
-        response = (await model.invoke([
-          new SystemMessage(
-            `${systemPrompt}\n\n当前必须直接给出最终专家结论，不再调用任何工具。`,
-          ),
-          new HumanMessage(createExpertContext(state)),
-          ...state.messages,
-        ])) as BaseMessage;
+      if (opts.usageService) {
+        response = await withTokenUsage(
+          {
+            graphName: "requirement-analysis",
+            nodeName: `${opts.name}-expert`,
+            agentName: opts.agentName ?? opts.name,
+            modelName,
+            conversationId: opts.usageContext?.conversationId,
+            threadId: opts.usageContext?.threadId,
+            overrideReason: budgetOverrideReason,
+          },
+          opts.usageService,
+          async () => (await invoke()) as BaseMessage,
+        );
       } else {
-        response = (await model.bindTools(tools).invoke(messages)) as BaseMessage;
+        response = (await invoke()) as BaseMessage;
       }
       return { messages: [response] };
     } catch (error) {
@@ -593,43 +690,87 @@ export function createExpertSubGraph(
     .compile() as unknown as CompiledStateGraph<any, any, any>;
 }
 
-export function createFunctionalExpert(model: BaseChatModel) {
+export function createFunctionalExpert(
+  model: BaseChatModel,
+  usageService?: TokenUsageService,
+  usageContext?: AnalysisUsageContext,
+  modelSelector?: ExpertModelSelector,
+) {
   return createExpertSubGraph(
     model,
     getExpertTools("functional"),
     FUNCTIONAL_EXPERT_SYSTEM_PROMPT,
     "functionalAnalysis",
-    { name: "功能" },
+    {
+      name: "功能",
+      agentName: "functional_expert",
+      usageService,
+      usageContext,
+      modelSelector,
+    },
   );
 }
 
-export function createPerformanceExpert(model: BaseChatModel) {
+export function createPerformanceExpert(
+  model: BaseChatModel,
+  usageService?: TokenUsageService,
+  usageContext?: AnalysisUsageContext,
+  modelSelector?: ExpertModelSelector,
+) {
   return createExpertSubGraph(
     model,
     getExpertTools("performance"),
     PERFORMANCE_EXPERT_SYSTEM_PROMPT,
     "performanceAnalysis",
-    { name: "性能与可靠性" },
+    {
+      name: "性能与可靠性",
+      agentName: "performance_expert",
+      usageService,
+      usageContext,
+      modelSelector,
+    },
   );
 }
 
-export function createSecurityExpert(model: BaseChatModel) {
+export function createSecurityExpert(
+  model: BaseChatModel,
+  usageService?: TokenUsageService,
+  usageContext?: AnalysisUsageContext,
+  modelSelector?: ExpertModelSelector,
+) {
   return createExpertSubGraph(
     model,
     getExpertTools("security"),
     SECURITY_EXPERT_SYSTEM_PROMPT,
     "securityAnalysis",
-    { name: "安全" },
+    {
+      name: "安全",
+      agentName: "security_expert",
+      usageService,
+      usageContext,
+      modelSelector,
+    },
   );
 }
 
-export function createComplianceExpert(model: BaseChatModel) {
+export function createComplianceExpert(
+  model: BaseChatModel,
+  usageService?: TokenUsageService,
+  usageContext?: AnalysisUsageContext,
+  modelSelector?: ExpertModelSelector,
+) {
   return createExpertSubGraph(
     model,
     getExpertTools("compliance"),
     COMPLIANCE_EXPERT_SYSTEM_PROMPT,
     "complianceAnalysis",
-    { name: "合规与治理" },
+    {
+      name: "合规与治理",
+      agentName: "compliance_expert",
+      usageService,
+      usageContext,
+      modelSelector,
+    },
   );
 }
 
@@ -755,7 +896,11 @@ function collectSelectedExpertOutputs(state: AnalysisSupervisorStateValue) {
     .filter((item) => item.content?.trim());
 }
 
-function createAggregatorNode(model: BaseChatModel) {
+function createAggregatorNode(
+  model: BaseChatModel,
+  usageService?: TokenUsageService,
+  usageContext?: AnalysisUsageContext,
+) {
   return async (
     state: AnalysisSupervisorStateValue,
   ): Promise<Partial<AnalysisSupervisorStateValue>> => {
@@ -771,7 +916,7 @@ function createAggregatorNode(model: BaseChatModel) {
     }
 
     try {
-      const response = await model.invoke([
+      const invoke = () => model.invoke([
         new SystemMessage(`你是需求分析团队的汇总负责人。请仅汇总本轮 Supervisor 已选择专家的结论，不得补入未执行专家的虚构结论。
 
 汇总要求：
@@ -789,6 +934,20 @@ function createAggregatorNode(model: BaseChatModel) {
           ].join("\n\n"),
         ),
       ]);
+      const response = usageService
+        ? await withTokenUsage(
+            {
+              graphName: "requirement-analysis",
+              nodeName: "aggregator",
+              agentName: "supervisor",
+              modelName: String((model as unknown as { modelName?: unknown }).modelName ?? "unknown"),
+              conversationId: usageContext?.conversationId,
+              threadId: usageContext?.threadId,
+            },
+            usageService,
+            async () => await invoke(),
+          )
+        : await invoke();
       const content = getMessageText(response as BaseMessage).trim();
       const analysisResult = content || fallback;
       return { analysisResult, analysis: analysisResult };
@@ -808,16 +967,31 @@ function createAggregatorNode(model: BaseChatModel) {
  */
 export function createAnalysisSupervisorSubGraph(
   model: BaseChatModel,
+  usageService?: TokenUsageService,
+  usageContext?: AnalysisUsageContext,
+  modelSelector?: ExpertModelSelector,
 ): CompiledStateGraph<any, any, any> {
   return new StateGraph(AnalysisSupervisorState, {
     output: AnalysisSupervisorOutput,
   })
     .addNode("supervisor", supervisorNode(model))
-    .addNode("functionalExpert", createFunctionalExpert(model))
-    .addNode("performanceExpert", createPerformanceExpert(model))
-    .addNode("securityExpert", createSecurityExpert(model))
-    .addNode("complianceExpert", createComplianceExpert(model))
-    .addNode("aggregator", createAggregatorNode(model))
+    .addNode(
+      "functionalExpert",
+      createFunctionalExpert(model, usageService, usageContext, modelSelector),
+    )
+    .addNode(
+      "performanceExpert",
+      createPerformanceExpert(model, usageService, usageContext, modelSelector),
+    )
+    .addNode(
+      "securityExpert",
+      createSecurityExpert(model, usageService, usageContext, modelSelector),
+    )
+    .addNode(
+      "complianceExpert",
+      createComplianceExpert(model, usageService, usageContext, modelSelector),
+    )
+    .addNode("aggregator", createAggregatorNode(model, usageService, usageContext))
     .addEdge(START, "supervisor")
     .addConditionalEdges("supervisor", routeToExperts, [
       "functionalExpert",

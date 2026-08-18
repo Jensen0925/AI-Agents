@@ -114,6 +114,53 @@ describe("analysis supervisor subgraph", () => {
     expect(result.functionalAnalysis).toContain("建议人工补充");
   });
 
+  it("uses the injected downgrade model when the monthly budget is tight", async () => {
+    const originalBudget = process.env.MONTHLY_BUDGET_USD;
+    process.env.MONTHLY_BUDGET_USD = "10";
+
+    const defaultModel = {
+      invoke: async () => new AIMessage("不应使用默认模型"),
+    } as unknown as BaseChatModel;
+    const downgradedModel = {
+      invoke: async () => new AIMessage("已使用降级模型完成轻量功能分析。"),
+    } as unknown as BaseChatModel;
+    const usageService = {
+      getMonthlyStats: async () => ({
+        totalCost: 8.5,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCachedTokens: 0,
+        calls: 1,
+      }),
+      recordUsage: async () => undefined,
+    };
+
+    try {
+      const graph = createFunctionalExpert(
+        defaultModel,
+        usageService as never,
+        undefined,
+        (agentName, action) => {
+          expect(agentName).toBe("functional_expert");
+          expect(action).toBe("downgrade");
+          return downgradedModel;
+        },
+      );
+      const result = await graph.invoke({
+        input: "开发一个用户登录功能",
+        messages: [new HumanMessage("开发一个用户登录功能")],
+      });
+
+      expect(result.functionalAnalysis).toContain("已使用降级模型");
+    } finally {
+      if (originalBudget === undefined) {
+        delete process.env.MONTHLY_BUDGET_USD;
+      } else {
+        process.env.MONTHLY_BUDGET_USD = originalBudget;
+      }
+    }
+  });
+
   it("keeps the degradation marker available to the aggregator", async () => {
     const model = {
       withStructuredOutput: () => ({
