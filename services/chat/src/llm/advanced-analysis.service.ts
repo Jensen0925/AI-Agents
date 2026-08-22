@@ -27,6 +27,7 @@ import {
 import type { ExpertModelSelector } from "./graph/experts";
 import { runAnalysisGraph } from "./graph/analysis-graph.runner";
 import { createChatModel } from "./model.factory";
+import { resolveReasoningDecision } from "./model-selection";
 import { createDeepOrchestrator } from "./deepagent/deep-orchestrator.service";
 import { detectLongChain } from "./agents/orchestrator.service";
 import { ArtifactService } from "../artifact/artifact.service";
@@ -940,7 +941,14 @@ export class AdvancedAnalysisService {
     // 不把可恢复的实验能力变成聊天接口的 500。
     if (detectLongChain(normalizedInput)) {
       try {
-        const deepModel = createChatModel({ reasoningEffort: "high" });
+        const reasoningDecision = resolveReasoningDecision({
+          input: normalizedInput,
+          intent: effectiveIntent,
+          isLongChain: true,
+        });
+        const deepModel = createChatModel({
+          reasoningLevel: reasoningDecision.level,
+        });
         const deepAgent = createDeepOrchestrator({
           model: deepModel,
           retrievedContext: formatRetrievedContext(retrievedDocuments),
@@ -1002,8 +1010,19 @@ export class AdvancedAnalysisService {
     let legacyFallbackResult: OrchestrationResult | undefined;
     let usedLocalFallback = false;
     try {
+      const reasoningDecision = resolveReasoningDecision({
+        input: normalizedInput,
+        intent: effectiveIntent,
+      });
+      const analysisModel = createChatModel({
+        reasoningLevel: reasoningDecision.level,
+      });
+      this.logger.debug(
+        `Analysis reasoning decision: level=${reasoningDecision.level}, reason=${reasoningDecision.reason}`,
+      );
       graphResult = await withDeadline(
         runAnalysisGraph(normalizedInput, context, {
+          model: analysisModel,
           userId,
           sessionId: conversationId,
           usageService: this.tokenUsageService,

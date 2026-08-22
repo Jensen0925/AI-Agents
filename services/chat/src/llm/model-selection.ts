@@ -1,5 +1,8 @@
 export type ReasoningEffort = "medium" | "high";
 
+/** 面向业务路由的三层推理级别。模型档位仍由 YAML 集中配置。 */
+export type ReasoningLevel = "light" | "standard" | "deep";
+
 /** 与 langchain.yaml 的 llm.modelTiers 对应的模型档位。 */
 export type ModelTier = "high" | "medium" | "compressor";
 
@@ -17,6 +20,11 @@ export interface ModelSelectionOptions {
    * 按档位从 YAML 的 llm.modelTiers 选择模型；未传时使用 llm.model 默认模型。
    */
   tier?: ModelTier;
+  /**
+   * 业务层已经完成意图/风险判断时，可用三层语义直接选择模型。
+   * 映射关系：light→compressor，standard→medium，deep→high。
+   */
+  reasoningLevel?: ReasoningLevel;
 }
 
 export interface LlmModelConfig {
@@ -32,7 +40,11 @@ export function resolveModelName(
 ): string {
   return (
     options.modelName?.trim() ||
-    (options.tier ? llm.modelTiers[options.tier] : llm.model)
+    (options.reasoningLevel
+      ? llm.modelTiers[reasoningLevelToTier(options.reasoningLevel)]
+      : options.tier
+        ? llm.modelTiers[options.tier]
+        : llm.model)
   );
 }
 
@@ -43,10 +55,95 @@ export function resolveReasoningEffort(
 ): ReasoningEffort {
   return (
     options.reasoningEffort ??
-    (options.tier
+    (options.reasoningLevel
+      ? reasoningLevelToEffort(options.reasoningLevel)
+      : options.tier
       ? options.tier === "high"
         ? "high"
         : "medium"
       : llm.reasoningEffort)
   );
+}
+
+export interface ReasoningDecisionInput {
+  intent?: "analyze" | "query" | "chat" | "risk_only";
+  input?: string;
+  requirementComplexity?: "low" | "medium" | "high";
+  riskLevel?: "low" | "medium" | "high";
+  hasRequirementId?: boolean;
+  isLongChain?: boolean;
+}
+
+export interface ReasoningDecision {
+  level: ReasoningLevel;
+  modelTier: ModelTier;
+  reasoningEffort: ReasoningEffort;
+  reason: string;
+}
+
+function reasoningLevelToTier(level: ReasoningLevel): ModelTier {
+  if (level === "light") return "compressor";
+  if (level === "standard") return "medium";
+  return "high";
+}
+
+function reasoningLevelToEffort(level: ReasoningLevel): ReasoningEffort {
+  return level === "deep" ? "high" : "medium";
+}
+
+/**
+ * 纯函数：根据意图、风险和任务复杂度选择三层推理级别。
+ * 优先级固定为高风险/深链路 → 轻量意图 → 标准默认，避免“查询风险”被误降级。
+ */
+export function resolveReasoningDecision(
+  input: ReasoningDecisionInput,
+): ReasoningDecision {
+  const text = input.input?.trim() ?? "";
+  const highRiskText =
+    /(安全|合规|权限|鉴权|认证|登录|注册|账号|密码|隐私|风控|金融|支付|法律|审计|加密|数据保护)/iu.test(
+      text,
+    );
+  const deep =
+    input.riskLevel === "high" ||
+    highRiskText ||
+    input.requirementComplexity === "high" ||
+    input.isLongChain === true ||
+    input.intent === "risk_only";
+
+  if (deep) {
+    const reason = input.riskLevel === "high" || highRiskText
+      ? "高风险或敏感领域需要深度推理"
+      : "复杂需求或长链路需要深度推理";
+    return {
+      level: "deep",
+      modelTier: "high",
+      reasoningEffort: "high",
+      reason,
+    };
+  }
+
+  if (input.intent === "chat" || input.intent === "query") {
+    return {
+      level: "light",
+      modelTier: "compressor",
+      reasoningEffort: "medium",
+      reason: input.intent === "chat" ? "普通闲聊使用轻量模型" : "状态查询使用轻量模型",
+    };
+  }
+
+  if (input.requirementComplexity === "low") {
+    return {
+      level: "light",
+      modelTier: "compressor",
+      reasoningEffort: "medium",
+      reason: "低复杂度需求使用轻量模型",
+    };
+  }
+
+  return {
+    level: "standard",
+    modelTier: "medium",
+    reasoningEffort: "medium",
+    reason: "普通需求使用标准推理",
+  };
 }

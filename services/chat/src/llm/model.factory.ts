@@ -10,7 +10,11 @@ import {
 } from "./model-selection";
 import { normalizeChatBaseURL } from "./normalize-base-url";
 
-export type { ModelTier, ReasoningEffort } from "./model-selection";
+export type {
+  ModelTier,
+  ReasoningEffort,
+  ReasoningLevel,
+} from "./model-selection";
 
 /** 创建聊天模型时的调用选项；兼容旧调用方，只保留显式覆盖能力。 */
 export type CreateChatModelOptions = ModelSelectionOptions;

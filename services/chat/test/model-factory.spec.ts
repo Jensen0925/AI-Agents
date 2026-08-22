@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { loadLangchainConfig } from "../src/config/load-langchain-config";
 import {
   resolveModelName,
+  resolveReasoningDecision,
   resolveReasoningEffort,
 } from "../src/llm/model-selection";
 import { normalizeChatBaseURL } from "../src/llm/normalize-base-url";
@@ -57,5 +58,77 @@ describe("模型分档配置驱动", () => {
     expect(resolveReasoningEffort({ tier: "compressor" }, llm)).toBe(
       "medium",
     );
+  });
+
+  test("三层推理级别映射到 YAML 中的模型档位", () => {
+    expect(resolveModelName({ reasoningLevel: "light" }, llm)).toBe(
+      llm.modelTiers.compressor,
+    );
+    expect(resolveModelName({ reasoningLevel: "standard" }, llm)).toBe(
+      llm.modelTiers.medium,
+    );
+    expect(resolveModelName({ reasoningLevel: "deep" }, llm)).toBe(
+      llm.modelTiers.high,
+    );
+    expect(resolveReasoningEffort({ reasoningLevel: "light" }, llm)).toBe(
+      "medium",
+    );
+    expect(resolveReasoningEffort({ reasoningLevel: "deep" }, llm)).toBe(
+      "high",
+    );
+  });
+});
+
+describe("三层推理决策", () => {
+  test("闲聊和查询优先使用轻量推理", () => {
+    expect(
+      resolveReasoningDecision({ intent: "chat", input: "你好，今天天气不错" }),
+    ).toMatchObject({ level: "light", modelTier: "compressor" });
+    expect(
+      resolveReasoningDecision({
+        intent: "query",
+        input: "查询 REQ-20240315-001 当前状态",
+      }),
+    ).toMatchObject({ level: "light", modelTier: "compressor" });
+  });
+
+  test("普通分析使用标准推理", () => {
+    expect(
+      resolveReasoningDecision({
+        intent: "analyze",
+        input: "开发商品列表和筛选页面",
+      }),
+    ).toMatchObject({ level: "standard", modelTier: "medium" });
+  });
+
+  test("高风险、复杂任务和长链路升级到深度推理", () => {
+    expect(
+      resolveReasoningDecision({
+        intent: "analyze",
+        input: "设计管理员权限和登录安全策略",
+      }),
+    ).toMatchObject({ level: "deep", modelTier: "high", reasoningEffort: "high" });
+    expect(
+      resolveReasoningDecision({
+        intent: "analyze",
+        input: "分析需求：开发一个用户登录功能",
+      }),
+    ).toMatchObject({ level: "deep", modelTier: "high" });
+    expect(
+      resolveReasoningDecision({
+        intent: "analyze",
+        isLongChain: true,
+      }),
+    ).toMatchObject({ level: "deep", modelTier: "high" });
+  });
+
+  test("高风险优先于查询和闲聊意图", () => {
+    expect(
+      resolveReasoningDecision({
+        intent: "query",
+        riskLevel: "high",
+        input: "查询支付权限风险",
+      }),
+    ).toMatchObject({ level: "deep", modelTier: "high" });
   });
 });
