@@ -11,7 +11,7 @@ async function writeDataset(contents: string): Promise<string> {
   return path;
 }
 
-describe("第十七章 Golden Dataset Loader", () => {
+describe("评测数据集加载", () => {
   it("加载 JSONL，并保留检索与生成评测所需字段", async () => {
     const path = await writeDataset(`
 # 允许注释行

@@ -4,7 +4,7 @@ import {
   gateDecision,
 } from "../rag/evaluation/aggregate";
 
-describe("第十七章统一评测聚合与门禁", () => {
+describe("统一评测聚合与门禁", () => {
   it("按全量和 tag 聚合已产出的指标", () => {
     const summary = aggregateEvaluation([
       {

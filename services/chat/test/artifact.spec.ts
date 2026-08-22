@@ -20,7 +20,7 @@ function artifactRecord(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe("Chapter 19 artifact service", () => {
+describe("artifact service", () => {
   it("creates a versioned artifact for the first generated report", async () => {
     const created = artifactRecord({ versions: [{ version: 1 }] });
     const transaction = {
