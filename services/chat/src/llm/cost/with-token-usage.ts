@@ -116,7 +116,7 @@ export async function withTokenUsage<T>(
         inputTokens + outputTokens;
     } else {
       outputTokens = estimateTextTokens(outputTextFromResult(result));
-      // 10.2 的真实样本输入/输出约为 5.8:1，这里保守圆整为 5 倍；
+      // 历史真实样本的输入/输出约为 5.8:1，这里保守圆整为 5 倍；
       // provider 提供真实 usage 时应始终优先使用真实值。
       inputTokens = outputTokens * 5;
       totalTokens = inputTokens + outputTokens;

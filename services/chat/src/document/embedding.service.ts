@@ -9,7 +9,7 @@ export const DOCUMENT_EMBEDDING_MODEL = LOCAL_EMBEDDING_MODEL;
 
 /**
  * 文档域向量化服务。
- * 复用第四章的 Xenova multilingual MiniLM 单例，避免同一进程重复加载模型。
+ * 复用共享的 Xenova multilingual MiniLM 单例，避免同一进程重复加载模型。
  */
 @Injectable()
 export class DocumentEmbeddingService {

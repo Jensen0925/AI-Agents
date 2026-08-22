@@ -256,7 +256,7 @@ type PostgresSaverLike = BaseCheckpointSaver & { setup(): Promise<void> };
  * 创建并初始化 PostgreSQL checkpointer。
  *
  * 依赖以动态加载方式接入：未配置 DATABASE_URL 或尚未安装可选包时，调用方
- * 可继续使用无持久化图；生产环境安装依赖后即可共享第五章 PostgreSQL。
+ * 可继续使用无持久化图；生产环境安装依赖后即可共享 PostgreSQL。
  */
 export async function createPostgresCheckpointer(): Promise<PostgresSaverLike | undefined> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
@@ -282,7 +282,7 @@ export async function createPostgresCheckpointer(): Promise<PostgresSaverLike | 
 
 /** 图的稳定对外输出；保留 analysis/risk，同时提供新的 Result 字段别名。 */
 export interface RunAnalysisGraphOutput {
-  /** 保留图的消息状态，兼容 8.3 直接读取 State 的调用方。 */
+  /** 保留图的消息状态，兼容直接读取 State 的既有调用方。 */
   messages: BaseMessage[];
   intent: RequirementIntent;
   handoffReason?: string;
@@ -451,7 +451,7 @@ function hasToolCalls(message: BaseMessage | undefined): boolean {
 
 /**
  * ReAct Agent 节点：模型决定继续调用工具还是直接输出分析结果。
- * 当传入的是旧测试 fake model 时，回退到第六章 analysisAgent，保证主图
+ * 当传入的是旧测试 fake model 时，回退到旧版 analysisAgent，保证主图
  * 的兼容回归测试仍然可以在没有真实模型的环境中运行。
  */
 function createAnalysisAgentNode(model: ChatModel) {
@@ -801,7 +801,7 @@ function createClassifierNode(model: ChatModel) {
   };
 }
 
-/** 字段抽取节点：调用第六章 extractAgent，并仅更新 extracted。 */
+/** 字段抽取节点：调用 extractAgent，并仅更新 extracted。 */
 async function extractNode(
   state: RequirementAnalysisStateValue,
 ): Promise<RequirementAnalysisStateUpdate> {
@@ -813,7 +813,7 @@ async function extractNode(
   return { extracted };
 }
 
-/** 澄清判断节点：调用第六章 clarifyAgent，并仅更新 clarified。 */
+/** 澄清判断节点：调用 clarifyAgent，并仅更新 clarified。 */
 async function clarifyNode(
   state: RequirementAnalysisStateValue,
 ): Promise<RequirementAnalysisStateUpdate> {
@@ -857,7 +857,7 @@ function createAnalysisNode(model: ChatModel) {
   };
 }
 
-/** 风险分析节点：调用第六章 riskAgent，并仅更新 risk。 */
+/** 风险分析节点：调用 riskAgent，并仅更新 risk。 */
 async function riskNode(
   state: RequirementAnalysisStateValue,
 ): Promise<RequirementAnalysisStateUpdate> {
@@ -1088,7 +1088,7 @@ async function summaryNode(
 
 /** 将 Critic-Refine 子图适配为主图的 summaryStep 节点。 */
 function createSummaryStepNode(model: ChatModel) {
-  // 8.5 的回归测试和部分旧调用方会注入只实现 invoke/withStructuredOutput
+  // 回归测试和部分旧调用方会注入只实现 invoke/withStructuredOutput
   // 的轻量模型。它们不具备工具绑定能力，也无法完成 Critic-Refine 的真实
   // 评审；保留旧 summaryAgent 作为兼容降级，真实 ChatOpenAI 仍走新子图。
   if (!getToolBindableModel(model)) {
@@ -1189,8 +1189,8 @@ export function createAnalysisGraph(
   model: BaseChatModel = createChatModel(),
   options: AnalysisGraphOptions = {},
 ) {
-  // 第九章 9.2：主图拓扑保持不变，只替换 analysisStep 的内部实现。
-  // 原 createAnalysisSubGraph() 仍保留，可用于第八章 ReAct 版本对比和回归测试。
+  // 主图拓扑保持不变，只替换 analysisStep 的内部实现。
+  // 原 createAnalysisSubGraph() 仍保留，可用于 ReAct 版本对比和回归测试。
   const analysisSupervisorSubGraph = createAnalysisSupervisorSubGraph(
     model,
     options.usageService,
@@ -1232,7 +1232,7 @@ export async function createPersistentAnalysisGraph(
 }
 
 /**
- * 第九章 9.4 的可选 Handoff 演示图。
+ * 可选 Handoff 演示图。
  *
  * 默认 createAnalysisGraph() 继续使用 classifier，以保留 query 专用分支；
  * 调用方需要体验 triage 时可改用本工厂。风险专项使用独立终点，避免进入

@@ -97,7 +97,7 @@ async function ensureDataset(client: Client) {
   }
 
   return client.createDataset(DATASET_NAME, {
-    description: "Chapter 17 local golden cases for requirement-analysis evaluation.",
+    description: "Local golden cases for requirement-analysis evaluation.",
     dataType: "kv",
   });
 }

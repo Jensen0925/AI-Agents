@@ -1,4 +1,4 @@
--- 第十九章：会话报告工件与不可变版本历史。
+-- 会话报告工件与不可变版本历史。
 -- 一个会话最多关联一个工件；删除会话或工件时，版本快照由外键级联删除。
 
 CREATE TYPE "ArtifactType" AS ENUM ('MARKDOWN', 'CODE', 'DOCUMENT', 'TABLE', 'CHART');
