@@ -31,7 +31,7 @@ afterEach(async () => {
 });
 
 async function connectInMemory(server: McpServer): Promise<ConnectedPair> {
-  const client = new Client({ name: 'chapter12-test-client', version: '1.0.0' });
+  const client = new Client({ name: 'mcp-test-client', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
@@ -100,7 +100,7 @@ function asBridgeClient(
   } as unknown as MCPClientService;
 }
 
-describe('12.4 MCP 协议层：工具逻辑', () => {
+describe('MCP 协议层：工具逻辑', () => {
   it('通过 InMemoryTransport 发现并调用需求分析工具', async () => {
     const { client } = await connectInMemory(createRequirementServer());
     const tools = await client.listTools();
@@ -126,7 +126,7 @@ describe('12.4 MCP 协议层：工具逻辑', () => {
   });
 });
 
-describe('12.5 JSON Schema 到 Zod 转换', () => {
+describe('JSON Schema 到 Zod 转换', () => {
   it('正确处理 required、optional、enum、array 与嵌套 object', () => {
     const schema = jsonSchemaToZod({
       type: 'object',
@@ -151,7 +151,7 @@ describe('12.5 JSON Schema 到 Zod 转换', () => {
   });
 });
 
-describe('12.7 多 Server 工具合并', () => {
+describe('多 Server 工具合并', () => {
   it('通过前缀合并多个 MCP Server 工具且能分别调用', async () => {
     const requirementClient = asBridgeClient(
       [{ name: 'analyze', description: '分析需求', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } }],
@@ -172,7 +172,7 @@ describe('12.7 多 Server 工具合并', () => {
   });
 });
 
-describe('12.8 MCP 错误处理', () => {
+describe('MCP 错误处理', () => {
   it('未知工具返回协议错误而不是伪造成功结果', async () => {
     const { client } = await connectInMemory(createRequirementServer());
     await expect(client.callTool({ name: 'not-exist', arguments: {} })).rejects.toThrow();
@@ -191,7 +191,7 @@ describe('12.8 MCP 错误处理', () => {
   });
 });
 
-describe('12.9 权限分级', () => {
+describe('权限分级', () => {
   it('普通成员会收到 isError，管理员可执行敏感工具', async () => {
     const server = new McpServer({ name: 'secured-tools', version: '1.0.0' });
     const registerTool: (name: string, config: unknown, handler: (input: any) => Promise<unknown>) => void =
@@ -225,7 +225,7 @@ describe('12.9 权限分级', () => {
   });
 });
 
-describe('12.10 客户端边界行为', () => {
+describe('客户端边界行为', () => {
   it('桥接器在客户端未连接时拒绝创建可调用工具', () => {
     const disconnected = {
       isConnected: () => false,

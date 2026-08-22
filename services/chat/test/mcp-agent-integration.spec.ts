@@ -105,7 +105,7 @@ function createManager(
   return manager;
 }
 
-describe('12.13 MCP Manager 与 LangGraph 功能专家集成', () => {
+describe('MCP Manager 与 LangGraph 功能专家集成', () => {
   it('连接三台 Server 后，analyze 意图获得 analyze、RAG、web search、estimate 工具并完成协同调用', async () => {
     const calls: RecordedCall[] = [];
     const manager = createManager(calls);

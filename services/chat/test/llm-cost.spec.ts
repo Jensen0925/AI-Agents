@@ -17,7 +17,7 @@ import { TokenUsageService } from "../src/llm/cost/token-usage.service";
 import { withTokenUsage } from "../src/llm/cost/with-token-usage";
 import { resolveBudgetAction } from "../src/llm/cost/budget-policy";
 
-describe("chapter 10 token economics estimator", () => {
+describe("token economics estimator", () => {
   it("returns zero for empty text", () => {
     expect(estimateTextTokens("")).toBe(0);
     expect(estimateTextTokens(null)).toBe(0);
@@ -71,7 +71,7 @@ describe("chapter 10 token economics estimator", () => {
   });
 });
 
-describe("10.5.1 message-trimmer", () => {
+describe("message-trimmer", () => {
   it("preserves system messages and keeps only the latest N non-system messages", () => {
     const system = new SystemMessage("需求分析助手");
     const messages = [system, new HumanMessage("第一轮"), new AIMessage("第一轮回复"), new HumanMessage("第二轮"), new AIMessage("第二轮回复")];
@@ -103,7 +103,7 @@ describe("10.5.1 message-trimmer", () => {
   });
 });
 
-describe("10.5.2 conversation-compressor", () => {
+describe("conversation-compressor", () => {
   it("does not invoke the summary model for a short conversation", async () => {
     const invoke = mock(async () => ({ content: "不应调用" }));
     const messages = [new SystemMessage("系统"), new HumanMessage("你好")];
@@ -123,7 +123,7 @@ describe("10.5.2 conversation-compressor", () => {
   });
 });
 
-describe("10.9.1 AgentModelSet", () => {
+describe("AgentModelSet", () => {
   it("assigns pro to high reasoning roles and flash to medium roles", () => {
     expect(DEFAULT_AGENT_MODEL_SET.supervisorModelConfigId).toBe("demo-deepseek-v4-pro");
     expect(DEFAULT_AGENT_MODEL_SET.functionalModelConfigId).toBe("demo-deepseek-v4-flash");
@@ -146,7 +146,7 @@ describe("10.9.1 AgentModelSet", () => {
   });
 });
 
-describe("10.9.2 runtime model overrides", () => {
+describe("runtime model overrides", () => {
   it("keeps the default model below the budget warning threshold", () => {
     const result = resolveModelForAgent({ agentName: "functional_expert", budgetStatus: { usedPercent: 79 } });
     expect(result.selectedModelConfigId).toBe("demo-deepseek-v4-flash");
@@ -188,7 +188,7 @@ describe("10.9.2 runtime model overrides", () => {
   });
 });
 
-describe("10.8.2 TokenUsageService", () => {
+describe("TokenUsageService", () => {
   function createPrismaMock() {
     return {
       tokenUsage: {
@@ -300,7 +300,7 @@ describe("10.8.2 TokenUsageService", () => {
   });
 });
 
-describe("10.8.3 withTokenUsage", () => {
+describe("withTokenUsage", () => {
   it("records exact OpenAI usage including cached tokens", async () => {
     const recordUsage = mock(async () => undefined);
     const response = {
@@ -377,7 +377,7 @@ describe("10.8.3 withTokenUsage", () => {
   });
 });
 
-describe("10.9.3 预算动作选择 - resolveBudgetAction", () => {
+describe("预算动作选择 - resolveBudgetAction", () => {
   it("allows normal execution below 80% budget", () => {
     const result = resolveBudgetAction({
       budgetUsedPercent: 50,

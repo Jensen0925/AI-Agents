@@ -36,7 +36,7 @@ afterEach(async () => {
 });
 
 async function createMcpAgentTools() {
-  server = new McpServer({ name: 'chapter12-llm-tools', version: '1.0.0' });
+  server = new McpServer({ name: 'mcp-llm-tools', version: '1.0.0' });
   const registerTool: (name: string, config: unknown, handler: (input: any) => Promise<unknown>) => void =
     server.registerTool.bind(server) as never;
   registerTool(
@@ -64,7 +64,7 @@ async function createMcpAgentTools() {
     },
   );
 
-  client = new Client({ name: 'chapter12-llm-client', version: '1.0.0' });
+  client = new Client({ name: 'mcp-llm-client', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
   await client.connect(clientTransport);
@@ -91,8 +91,8 @@ function createRealAgent(tools: ReturnType<typeof bridgeMCPToLangChain>): ReactA
   return createReactAgent({ llm: model, tools });
 }
 
-describe('第十二章 Layer 2：LLM 与 MCP 集成（需要 OPENAI_API_KEY）', () => {
-  test.skipIf(!shouldRunLlmIntegration)('12.11 Agent 能自主选择正确的 MCP 工具', async () => {
+describe('Layer 2：LLM 与 MCP 集成（需要 OPENAI_API_KEY）', () => {
+  test.skipIf(!shouldRunLlmIntegration)('Agent 能自主选择正确的 MCP 工具', async () => {
     const tools = await createMcpAgentTools();
     const agent = createRealAgent(tools);
     await agent.invoke({
@@ -106,7 +106,7 @@ describe('第十二章 Layer 2：LLM 与 MCP 集成（需要 OPENAI_API_KEY）',
     expect(invokedTools).toContain('analyze_completeness');
   }, 90_000);
 
-  test.skipIf(!shouldRunLlmIntegration)('12.12 Agent 能协同 analyze、search 与 estimate 三个 MCP 工具', async () => {
+  test.skipIf(!shouldRunLlmIntegration)('Agent 能协同 analyze、search 与 estimate 三个 MCP 工具', async () => {
     const tools = await createMcpAgentTools();
     const agent = createRealAgent(tools);
     await agent.invoke({

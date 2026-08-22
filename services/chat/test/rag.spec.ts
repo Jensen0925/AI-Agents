@@ -21,7 +21,7 @@ import {
   RAG_TOOL_DESCRIPTION,
 } from "../rag/agent/rag-tool";
 
-describe("11.2.4 相似度", () => {
+describe("相似度", () => {
   it("单位向量自相似为 1", () => {
     expect(cosineSimilarity([1, 0, 0], [1, 0, 0])).toBe(1);
   });
@@ -55,8 +55,8 @@ describe("11.2.4 相似度", () => {
   });
 });
 
-describe("11.4 文档切分", () => {
-  it("11.4.3 默认 chunkSize=500 时，1200 字文本切为 3 个 chunk", async () => {
+describe("文档切分", () => {
+  it("默认 chunkSize=500 时，1200 字文本切为 3 个 chunk", async () => {
     const text = "文".repeat(1200);
     const chunks = await chunkText(text);
 
@@ -69,7 +69,7 @@ describe("11.4 文档切分", () => {
     }
   });
 
-  it("11.4.4 重叠 50 字时，相邻 chunk 保留正确的重叠内容", async () => {
+  it("重叠 50 字时，相邻 chunk 保留正确的重叠内容", async () => {
     const text = Array.from({ length: 1_200 }, (_, index) =>
       String.fromCharCode(0x4e00 + (index % 2_000)),
     ).join("");
@@ -83,7 +83,7 @@ describe("11.4 文档切分", () => {
     }
   });
 
-  it("11.4.5 优先在中文标点或换行处分割，不在词中截断", async () => {
+  it("优先在中文标点或换行处分割，不在词中截断", async () => {
     const text = "第一段需求说明。\n第二段需求说明。\n第三段需求说明。";
     const chunks = await chunkText(text, { chunkSize: 10, chunkOverlap: 0 });
 
@@ -100,7 +100,7 @@ describe("11.4 文档切分", () => {
     ).toBe(true);
   });
 
-  it("11.4.7 Parent-Child 切分中，每个 child 都能找到所属 parent", async () => {
+  it("Parent-Child 切分中，每个 child 都能找到所属 parent", async () => {
     const text = "需求内容".repeat(500);
     const { parents, children } = await chunkParentChild(text, 500, 200);
 
@@ -115,7 +115,7 @@ describe("11.4 文档切分", () => {
   });
 });
 
-describe("11.5 向量数据库", () => {
+describe("向量数据库", () => {
   const vectors = Array.from({ length: 50 }, (_, index) =>
     normalize([
       (index % 7) + 1,
@@ -159,7 +159,7 @@ describe("11.5 向量数据库", () => {
     };
   }
 
-  it("11.5.2 小数据集上 KNN 暴力基线与 ANN 仓储检索结果一致", async () => {
+  it("小数据集上 KNN 暴力基线与 ANN 仓储检索结果一致", async () => {
     const topK = 8;
     const baseline = vectors
       .map((embedding, index) => ({
@@ -178,7 +178,7 @@ describe("11.5 向量数据库", () => {
     );
   });
 
-  it("11.5.6 pgvector 余弦 score 始终等于 1 - 距离", async () => {
+  it("pgvector 余弦 score 始终等于 1 - 距离", async () => {
     const results = await similaritySearch(
       createKnnPrismaMock(),
       queryVector,
@@ -199,27 +199,27 @@ describe("11.5 向量数据库", () => {
   });
 });
 
-describe("11.7 评估", () => {
-  it("11.7.1 所有相关文档都位于 Top-K 时 Recall@K 为 1", () => {
+describe("评估", () => {
+  it("所有相关文档都位于 Top-K 时 Recall@K 为 1", () => {
     expect(recallAtK(["doc-a", "doc-b", "doc-c"], ["doc-a", "doc-b"], 2)).toBe(
       1,
     );
   });
 
-  it("11.7.1 MRR 在第 1 位命中为 1，在第 2 位命中为 0.5", () => {
+  it("MRR 在第 1 位命中为 1，在第 2 位命中为 0.5", () => {
     expect(mrr([["doc-a", "doc-b"]], [["doc-a"]])).toBe(1);
     expect(mrr([["doc-a", "doc-b"]], [["doc-b"]])).toBe(0.5);
   });
 
-  it("11.7.1 Precision@K 使用 Top-K 作为分母", () => {
+  it("Precision@K 使用 Top-K 作为分母", () => {
     expect(precisionAtK(["doc-a", "doc-b"], ["doc-a"], 2)).toBe(0.5);
   });
 
-  it("11.7.1 单个相关文档完全命中时 NDCG@K 为 1", () => {
+  it("单个相关文档完全命中时 NDCG@K 为 1", () => {
     expect(ndcgAtK(["doc-a", "doc-b"], ["doc-a"], 2)).toBe(1);
   });
 
-  it("11.7.3 RAGAS 服务不可用时告警并返回 null，不抛错", async () => {
+  it("RAGAS 服务不可用时告警并返回 null，不抛错", async () => {
     const warnings: string[] = [];
     const unavailableFetch = (async () => {
       throw new Error("RAGAS offline");
@@ -251,7 +251,7 @@ describe("11.7 评估", () => {
   });
 });
 
-describe("11.10 集成 Agent", () => {
+describe("Agent 集成", () => {
   it("allow 时工具将 ragAsk 的 answer 与 citations 序列化为 JSON 字符串", async () => {
     const ragTool = createRagTool({
       budgetUsedPercent: 30,

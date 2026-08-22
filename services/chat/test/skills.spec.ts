@@ -204,7 +204,7 @@ afterEach(() => {
   invokedTools.length = 0;
 });
 
-describe('13.4 Skills Layer 1：零 LLM 依赖测试', () => {
+describe('Skills Layer 1：零 LLM 依赖测试', () => {
   test('load_skill Tool 具备固定名称与可读描述', () => {
     const tool = createLoadSkillTool();
 
@@ -289,7 +289,7 @@ describe('13.4 Skills Layer 1：零 LLM 依赖测试', () => {
   });
 });
 
-describe('13.7 Skills Layer 2：LLM 集成测试', () => {
+describe('Skills Layer 2：LLM 集成测试', () => {
   test.skipIf(!shouldRunLlmIntegration)('需求分析场景会调用 load_skill 和 analyze_completeness', async () => {
     const agent = createRealAgent(
       createRequirementAgentTools(),

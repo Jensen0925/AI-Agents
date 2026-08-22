@@ -20,7 +20,7 @@ const doc = (chunkId: string, content: string): RetrievalResult => ({
   score: 0,
 });
 
-describe("20.6 长链路由 detectLongChain", () => {
+describe("长链路由 detectLongChain", () => {
   it("两个不同需求编号进入长链，单编号和重复编号留在主图", () => {
     expect(detectLongChain("评估 REQ-001 与 REQ-002 的冲突")).toBe(true);
     expect(detectLongChain("REQ-001 又是 REQ-001")).toBe(false);
@@ -28,7 +28,7 @@ describe("20.6 长链路由 detectLongChain", () => {
   });
 });
 
-describe("20.3 检索上下文注入 buildRetrievedContextBlock", () => {
+describe("检索上下文注入 buildRetrievedContextBlock", () => {
   it("空值和占位文本不污染 prompt", () => {
     expect(buildRetrievedContextBlock()).toBe("");
     expect(buildRetrievedContextBlock("无相关参考文档")).toBe("");
@@ -41,7 +41,7 @@ describe("20.3 检索上下文注入 buildRetrievedContextBlock", () => {
   });
 });
 
-describe("20.4 MCP 降级与专家本地工具", () => {
+describe("MCP 降级与专家本地工具", () => {
   it("连接不可用时仍返回领域本地工具", () => {
     const functionalTools = getExpertTools("functional").map((tool) => tool.name);
     expect(functionalTools).toEqual([
@@ -55,7 +55,7 @@ describe("20.4 MCP 降级与专家本地工具", () => {
   });
 });
 
-describe("20.2 hybrid 检索后端", () => {
+describe("hybrid 检索后端", () => {
   it("中英文分词可用于 BM25", () => {
     expect(tokenize("OAuth2 企业微信")).toEqual(["oauth2", "企", "业", "微", "信"]);
   });
