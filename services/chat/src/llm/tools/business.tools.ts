@@ -12,8 +12,16 @@ import { z } from "zod";
 
 const WORKSPACE_ROOT = resolve(process.cwd(), "workspace");
 
-function isPathInsideWorkspace(targetPath: string): boolean {
-  const relativePath = relative(WORKSPACE_ROOT, targetPath);
+function workspaceRoot(namespace?: string): string {
+  if (!namespace) return WORKSPACE_ROOT;
+  if (!/^[A-Za-z0-9_-]+$/.test(namespace)) {
+    throw new Error("Invalid workspace namespace");
+  }
+  return join(WORKSPACE_ROOT, "users", namespace);
+}
+
+function isPathInsideWorkspace(root: string, targetPath: string): boolean {
+  const relativePath = relative(root, targetPath);
   return (
     relativePath === "" ||
     (relativePath !== ".." &&
@@ -25,26 +33,30 @@ function isPathInsideWorkspace(targetPath: string): boolean {
 /**
  * 将用户提供的相对路径限制在 services/chat/workspace 目录内。
  */
-export function safePath(relativePath: string): string {
+export function safePath(relativePath: string, namespace?: string): string {
   const normalizedPath = relativePath.trim();
 
   if (!normalizedPath || isAbsolute(normalizedPath)) {
     throw new Error("Path must be a non-empty workspace-relative path");
   }
 
-  const targetPath = resolve(WORKSPACE_ROOT, normalizedPath);
-  if (!isPathInsideWorkspace(targetPath)) {
+  const root = workspaceRoot(namespace);
+  const targetPath = resolve(root, normalizedPath);
+  if (!isPathInsideWorkspace(root, targetPath)) {
     throw new Error("Path escapes the workspace sandbox");
   }
 
   return targetPath;
 }
 
-async function assertNoSymbolicLink(targetPath: string): Promise<void> {
-  await mkdir(WORKSPACE_ROOT, { recursive: true });
-  const relativePath = relative(WORKSPACE_ROOT, targetPath);
+async function assertNoSymbolicLink(
+  targetPath: string,
+  root: string,
+): Promise<void> {
+  await mkdir(root, { recursive: true });
+  const relativePath = relative(root, targetPath);
   const segments = relativePath ? relativePath.split(sep) : [];
-  let currentPath = WORKSPACE_ROOT;
+  let currentPath = root;
 
   for (const segment of segments) {
     currentPath = join(currentPath, segment);
@@ -68,21 +80,27 @@ async function assertNoSymbolicLink(targetPath: string): Promise<void> {
   }
 }
 
-async function readWorkspaceFile(relativePath: string): Promise<string> {
-  const targetPath = safePath(relativePath);
-  await assertNoSymbolicLink(targetPath);
+async function readWorkspaceFile(
+  relativePath: string,
+  namespace?: string,
+): Promise<string> {
+  const root = workspaceRoot(namespace);
+  const targetPath = safePath(relativePath, namespace);
+  await assertNoSymbolicLink(targetPath, root);
   return readFile(targetPath, "utf8");
 }
 
 async function writeWorkspaceFile(
   relativePath: string,
   content: string,
+  namespace?: string,
 ): Promise<string> {
-  const targetPath = safePath(relativePath);
-  await assertNoSymbolicLink(targetPath);
+  const root = workspaceRoot(namespace);
+  const targetPath = safePath(relativePath, namespace);
+  await assertNoSymbolicLink(targetPath, root);
   await mkdir(dirname(targetPath), { recursive: true });
   // 创建目录后再次校验，避免新目录层级中出现符号链接。
-  await assertNoSymbolicLink(targetPath);
+  await assertNoSymbolicLink(targetPath, root);
   await writeFile(targetPath, content, "utf8");
 
   return JSON.stringify({
@@ -142,17 +160,26 @@ export const businessTools = [
 export async function executeBusinessTool(
   name: string,
   args: Record<string, unknown>,
+  namespace?: string,
 ): Promise<unknown> {
   if (name === queryRequirementTool.name) {
-    return queryRequirementTool.invoke(args as { requirementId: string });
+    const requirementId = String(args.requirementId ?? "");
+    return readWorkspaceFile(
+      `requirements/${requirementId}.json`,
+      namespace,
+    );
   }
 
   if (name === readFileTool.name) {
-    return readFileTool.invoke(args as { path: string });
+    return readWorkspaceFile(String(args.path ?? ""), namespace);
   }
 
   if (name === writeFileTool.name) {
-    return writeFileTool.invoke(args as { path: string; content: string });
+    return writeWorkspaceFile(
+      String(args.path ?? ""),
+      String(args.content ?? ""),
+      namespace,
+    );
   }
 
   throw new Error(`Unknown tool: ${name}`);

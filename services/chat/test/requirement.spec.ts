@@ -1,8 +1,13 @@
 import { describe, expect, it, mock } from "bun:test";
 import type { RequirementResult } from "@cloudsage/contracts";
-import { METHOD_METADATA, PATH_METADATA } from "@nestjs/common/constants";
+import {
+  GUARDS_METADATA,
+  METHOD_METADATA,
+  PATH_METADATA,
+} from "@nestjs/common/constants";
 import { RequestMethod } from "@nestjs/common";
 import { AppController } from "../src/app.controller";
+import { JwtAuthGuard } from "../src/auth/jwt-auth.guard";
 import type { RequirementService } from "../src/llm/requirement.service";
 
 const INPUT = "用户注册时必须绑定手机号，密码至少8位";
@@ -16,6 +21,9 @@ describe("AppController requirement extraction", () => {
     );
     expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(
       RequestMethod.POST,
+    );
+    expect(Reflect.getMetadata(GUARDS_METADATA, handler)).toContain(
+      JwtAuthGuard,
     );
   });
 

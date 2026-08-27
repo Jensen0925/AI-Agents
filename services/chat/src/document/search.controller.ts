@@ -20,6 +20,9 @@ interface SearchBody {
   topK: number;
 }
 
+const MAX_QUERY_LENGTH = 20_000;
+const MAX_TOP_K = 20;
+
 function currentUserId(request: AuthenticatedRequest): string {
   if (!request.user) {
     throw new BadRequestException("Authenticated user is unavailable");
@@ -41,6 +44,11 @@ export class SearchController {
     if (typeof body?.query !== "string" || body.query.trim().length === 0) {
       throw new BadRequestException("query must be a non-empty string");
     }
+    if (body.query.trim().length > MAX_QUERY_LENGTH) {
+      throw new BadRequestException(
+        `query must not exceed ${MAX_QUERY_LENGTH} characters`,
+      );
+    }
     if (
       typeof body?.topK !== "number" ||
       !Number.isFinite(body.topK) ||
@@ -52,7 +60,7 @@ export class SearchController {
     return this.searchService.similaritySearch(
       body.query.trim(),
       currentUserId(request),
-      Math.floor(body.topK),
+      Math.min(MAX_TOP_K, Math.floor(body.topK)),
     );
   }
 }

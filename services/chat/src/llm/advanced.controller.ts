@@ -6,7 +6,13 @@ import {
   Get,
   Param,
   Post,
+  Req,
+  UseGuards,
 } from "@nestjs/common";
+import {
+  type AuthenticatedRequest,
+  JwtAuthGuard,
+} from "../auth/jwt-auth.guard";
 import {
   type OrchestrationResult,
   OrchestratorService,
@@ -53,58 +59,100 @@ interface OrchestrateBody {
 }
 
 
+const MAX_TEXT_LENGTH = 20_000;
+
 function requireText(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new BadRequestException(`${field} must be a non-empty string`);
   }
 
+  if (value.trim().length > MAX_TEXT_LENGTH) {
+    throw new BadRequestException(
+      `${field} must not exceed ${MAX_TEXT_LENGTH} characters`,
+    );
+  }
+
   return value.trim();
 }
 
+function currentUserId(request: AuthenticatedRequest): string {
+  if (!request.user) {
+    throw new BadRequestException("Authenticated user is unavailable");
+  }
+  return request.user.userId;
+}
+
+function scopedSessionId(userId: string, sessionId: string): string {
+  return `${userId}:${sessionId}`;
+}
+
 @Controller("api/memory")
+@UseGuards(JwtAuthGuard)
 export class MemoryController {
   constructor(private readonly memoryService: RunnableMemoryService) {}
 
   @Post("chat")
-  chat(@Body() body: MemoryChatBody): Promise<MemoryChatResult> {
+  chat(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: MemoryChatBody,
+  ): Promise<MemoryChatResult> {
     const sessionId = requireText(body?.sessionId, "sessionId");
     const input = requireText(body?.input, "input");
-    return this.memoryService.chat(sessionId, input);
+    return this.memoryService.chat(
+      scopedSessionId(currentUserId(request), sessionId),
+      input,
+    );
   }
 
   @Get("history/:sessionId")
-  async getHistory(@Param("sessionId") rawSessionId: string): Promise<{
+  async getHistory(
+    @Req() request: AuthenticatedRequest,
+    @Param("sessionId") rawSessionId: string,
+  ): Promise<{
     sessionId: string;
     messages: MemoryHistoryMessage[];
   }> {
     const sessionId = requireText(rawSessionId, "sessionId");
     return {
       sessionId,
-      messages: await this.memoryService.getHistory(sessionId),
+      messages: await this.memoryService.getHistory(
+        scopedSessionId(currentUserId(request), sessionId),
+      ),
     };
   }
 
   @Delete("history/:sessionId")
   async clearHistory(
+    @Req() request: AuthenticatedRequest,
     @Param("sessionId") rawSessionId: string,
   ): Promise<{ ok: true; sessionId: string }> {
     const sessionId = requireText(rawSessionId, "sessionId");
-    await this.memoryService.clearSession(sessionId);
+    await this.memoryService.clearSession(
+      scopedSessionId(currentUserId(request), sessionId),
+    );
     return { ok: true, sessionId };
   }
 }
 
 @Controller("api/files")
+@UseGuards(JwtAuthGuard)
 export class FilesystemController {
   constructor(private readonly filesystemService: FilesystemService) {}
 
   @Post("chat")
-  chat(@Body() body: FilesystemChatBody): Promise<FilesystemChatResult> {
-    return this.filesystemService.chat(requireText(body?.input, "input"));
+  chat(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: FilesystemChatBody,
+  ): Promise<FilesystemChatResult> {
+    return this.filesystemService.chat(
+      requireText(body?.input, "input"),
+      currentUserId(request),
+    );
   }
 }
 
 @Controller("api/embedding")
+@UseGuards(JwtAuthGuard)
 export class EmbeddingController {
   constructor(
     private readonly embeddingService: EmbeddingService,
@@ -123,21 +171,40 @@ export class EmbeddingController {
   }
 
   @Post("store")
-  async store(@Body() body: StoreBody): Promise<{ count: number }> {
+  async store(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: StoreBody,
+  ): Promise<{ count: number }> {
     if (
       !Array.isArray(body?.texts) ||
       body.texts.length === 0 ||
-      body.texts.some((text) => typeof text !== "string" || text.trim() === "")
+      body.texts.length > 100 ||
+      body.texts.some(
+        (text) =>
+          typeof text !== "string" ||
+          text.trim() === "" ||
+          text.trim().length > MAX_TEXT_LENGTH,
+      )
     ) {
-      throw new BadRequestException("texts must be a non-empty string array");
+      throw new BadRequestException(
+        "texts must contain 1-100 non-empty strings of at most 20000 characters",
+      );
     }
 
     const texts = body.texts.map((text) => text.trim());
-    return { count: await this.vectorStoreService.addTexts(texts) };
+    return {
+      count: await this.vectorStoreService.addTexts(
+        texts,
+        currentUserId(request),
+      ),
+    };
   }
 
   @Post("search")
-  async search(@Body() body: SearchBody): Promise<{
+  async search(
+    @Req() request: AuthenticatedRequest,
+    @Body() body: SearchBody,
+  ): Promise<{
     query: string;
     k: number;
     results: VectorSearchResult[];
@@ -155,12 +222,17 @@ export class EmbeddingController {
     return {
       query,
       k,
-      results: await this.vectorStoreService.search(query, k),
+      results: await this.vectorStoreService.search(
+        query,
+        k,
+        currentUserId(request),
+      ),
     };
   }
 }
 
 @Controller("api/agents")
+@UseGuards(JwtAuthGuard)
 export class AgentsController {
   constructor(private readonly orchestratorService: OrchestratorService) {}
 

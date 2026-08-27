@@ -21,19 +21,22 @@ export interface VectorSearchResult {
  */
 @Injectable()
 export class VectorStoreService {
-  private vectorStore?: MemoryVectorStore;
-  private initialization?: Promise<void>;
+  private readonly vectorStores = new Map<string, MemoryVectorStore>();
+  private readonly initializations = new Map<string, Promise<void>>();
 
   constructor(private readonly embeddingService: EmbeddingService) {}
 
   /** 首次访问时创建向量库并且只灌入一次内置需求规范片段。 */
-  private async getVectorStore(): Promise<MemoryVectorStore> {
-    if (!this.vectorStore) {
-      this.vectorStore = new MemoryVectorStore(this.embeddingService);
+  private async getVectorStore(namespace: string): Promise<MemoryVectorStore> {
+    let vectorStore = this.vectorStores.get(namespace);
+    if (!vectorStore) {
+      vectorStore = new MemoryVectorStore(this.embeddingService);
+      this.vectorStores.set(namespace, vectorStore);
     }
 
-    if (!this.initialization) {
-      this.initialization = this.vectorStore.addDocuments(
+    let initialization = this.initializations.get(namespace);
+    if (!initialization) {
+      initialization = vectorStore.addDocuments(
         INITIAL_DOCUMENTS.map(
           (text, index) =>
             new Document({
@@ -42,15 +45,16 @@ export class VectorStoreService {
             }),
         ),
       );
+      this.initializations.set(namespace, initialization);
     }
 
-    await this.initialization;
-    return this.vectorStore;
+    await initialization;
+    return vectorStore;
   }
 
   /** 将文本作为 API 来源文档写入内存向量库，并返回新增数量。 */
-  async addTexts(texts: string[]): Promise<number> {
-    const vectorStore = await this.getVectorStore();
+  async addTexts(texts: string[], namespace = "default"): Promise<number> {
+    const vectorStore = await this.getVectorStore(namespace);
     const documents = texts.map(
       (text) => new Document({ pageContent: text, metadata: { source: "api" } }),
     );
@@ -59,8 +63,12 @@ export class VectorStoreService {
   }
 
   /** 按查询向量返回前 k 个相似文档、分数及元数据。 */
-  async search(query: string, k: number): Promise<VectorSearchResult[]> {
-    const vectorStore = await this.getVectorStore();
+  async search(
+    query: string,
+    k: number,
+    namespace = "default",
+  ): Promise<VectorSearchResult[]> {
+    const vectorStore = await this.getVectorStore(namespace);
     const results = await vectorStore.similaritySearchWithScore(query, k);
 
     return results.map(([document, score]) => ({

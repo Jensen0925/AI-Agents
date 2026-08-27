@@ -1,5 +1,6 @@
 import type { RequirementResult } from "@cloudsage/contracts";
-import { Controller, Logger, Post, Res } from "@nestjs/common";
+import { Controller, Logger, Post, Res, UseGuards } from "@nestjs/common";
+import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import {
   LANGCHAIN_USER_INPUT,
   LlmService,
@@ -19,6 +20,7 @@ interface StreamingResponse {
 }
 
 @Controller("api/langchain")
+@UseGuards(JwtAuthGuard)
 export class LlmController {
   private readonly logger = new Logger(LlmController.name);
 

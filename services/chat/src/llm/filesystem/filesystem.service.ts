@@ -96,18 +96,22 @@ export class FilesystemService {
   }
 
   /** 不经过模型，直接调用受沙箱保护的 write_file 工具保存制品。 */
-  async writeFile(relativePath: string, content: string): Promise<void> {
+  async writeFile(
+    relativePath: string,
+    content: string,
+    namespace?: string,
+  ): Promise<void> {
     await executeBusinessTool("write_file", {
       path: relativePath,
       content,
-    });
+    }, namespace);
   }
 
   /**
    * 执行模型与文件工具的多轮闭环，直到模型不再请求工具或达到轮次上限。
    * 每次工具执行结果都会以 ToolMessage 回传模型，并保留审计摘要。
    */
-  async chat(input: string): Promise<FilesystemChatResult> {
+  async chat(input: string, namespace?: string): Promise<FilesystemChatResult> {
     const modelWithTools = this.getModel().bindTools(businessTools);
     const messages: BaseMessage[] = [
       new SystemMessage(FILESYSTEM_SYSTEM_PROMPT),
@@ -140,7 +144,7 @@ export class FilesystemService {
 
         try {
           output = toolOutputToText(
-            await executeBusinessTool(toolCall.name, toolCall.args),
+            await executeBusinessTool(toolCall.name, toolCall.args, namespace),
           );
         } catch (error) {
           status = "error";

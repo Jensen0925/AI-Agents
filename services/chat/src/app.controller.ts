@@ -1,5 +1,13 @@
 import { APP_NAME, type RequirementResult } from "@cloudsage/contracts";
-import { BadRequestException, Body, Controller, Get, Post } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Get,
+  Post,
+  UseGuards,
+} from "@nestjs/common";
+import { JwtAuthGuard } from "./auth/jwt-auth.guard";
 import { RequirementService } from "./llm/requirement.service";
 
 interface ExtractRequirementBody {
@@ -23,6 +31,7 @@ export class AppController {
   }
 
   @Post("requirement/extract")
+  @UseGuards(JwtAuthGuard)
   extractRequirement(
     @Body() body: ExtractRequirementBody,
   ): Promise<RequirementResult> {
@@ -30,6 +39,10 @@ export class AppController {
       throw new BadRequestException("input must be a non-empty string");
     }
 
-    return this.requirementService.extract(body.input.trim());
+    const input = body.input.trim();
+    if (input.length > 20_000) {
+      throw new BadRequestException("input must not exceed 20000 characters");
+    }
+    return this.requirementService.extract(input);
   }
 }
