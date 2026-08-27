@@ -8,6 +8,7 @@ import {
   HttpStatus,
   Param,
   Post,
+  Patch,
   Req,
   Res,
   StreamableFile,
@@ -27,6 +28,7 @@ import {
   ALLOWED_DOCUMENT_MIME_TYPES,
   DocumentService,
   MAX_DOCUMENT_SIZE,
+  isDocumentCategoryId,
   type UploadedDocumentFile,
 } from "./document.service";
 
@@ -75,6 +77,7 @@ export class DocumentController {
     @Req() request: AuthenticatedRequest,
     @UploadedFile() file: UploadedDocumentFile | undefined,
     @Body("filename") filename?: string,
+    @Body("category") category?: string,
   ) {
     if (!file) {
       throw new BadRequestException("file is required");
@@ -82,11 +85,32 @@ export class DocumentController {
     if (filename !== undefined && typeof filename !== "string") {
       throw new BadRequestException("filename must be a string");
     }
+    if (category !== undefined && (typeof category !== "string" || !isDocumentCategoryId(category.trim()))) {
+      throw new BadRequestException("category must be a valid document category");
+    }
 
     return this.documentService.upload(
       currentUserId(request),
       file,
       filename?.trim() || file.originalname,
+      category,
+    );
+  }
+
+  @Patch(":id/category")
+  updateCategory(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") documentId: string,
+    @Body("category") category?: string,
+  ) {
+    if (typeof category !== "string" || !isDocumentCategoryId(category.trim())) {
+      throw new BadRequestException("category must be a valid document category");
+    }
+
+    return this.documentService.updateCategory(
+      requireId(documentId),
+      currentUserId(request),
+      category,
     );
   }
 

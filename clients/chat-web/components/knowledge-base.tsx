@@ -51,6 +51,7 @@ interface DocumentItem {
   chunkCount: number;
   createdAt: string;
   filePath?: string | null;
+  category?: Exclude<DocumentCategory["id"], "all">;
 }
 
 export interface DocumentCategory {
@@ -67,6 +68,10 @@ const CATEGORY_NAMES: Array<Omit<DocumentCategory, "count">> = [
   { id: "sales", name: "销售手册" },
   { id: "design", name: "设计指南" },
 ];
+
+const CATEGORY_OPTIONS = CATEGORY_NAMES.filter(
+  (category) => category.id !== "all",
+);
 
 export interface TaskEvent {
   id: string;
@@ -152,15 +157,30 @@ function fileKind(mimeType: string) {
   return "TXT";
 }
 
-function inferCategory(filename: string): DocumentCategory["id"] {
+function inferCategory(
+  filename: string,
+): Exclude<DocumentCategory["id"], "all"> {
   const normalized = filename.toLowerCase();
-  if (/设计|ui|ux|视觉|组件|样式|交互/.test(normalized)) return "design";
+  if (
+    /设计|视觉|组件|样式|交互/.test(normalized) ||
+    /(^|[^a-z0-9])(ui|ux)([^a-z0-9]|$)/.test(normalized)
+  ) {
+    return "design";
+  }
   if (/员工|人事|考勤|绩效|福利|招聘|薪酬/.test(normalized)) return "hr";
   if (/销售|市场|客户|报价|商务|营销/.test(normalized)) return "sales";
-  if (/技术|架构|api|接口|开发|数据库|安全|部署|运维|代码|规范/.test(normalized)) {
+  if (
+    /技术|架构|接口|开发|数据库|安全|部署|运维|代码|规范/.test(
+      normalized,
+    ) || /(^|[^a-z0-9])api([^a-z0-9]|$)/.test(normalized)
+  ) {
     return "engineering";
   }
   return "product";
+}
+
+function documentCategory(document: DocumentItem): Exclude<DocumentCategory["id"], "all"> {
+  return document.category ?? inferCategory(document.filename);
 }
 
 function documentSummary(document: DocumentItem) {
@@ -314,18 +334,10 @@ export function DarkSidebar({
 
       {active === "library" ? (
         <div className="flex min-h-0 flex-1 flex-col px-3">
-          <div className="flex items-center justify-between px-2 pb-2">
+          <div className="flex items-center px-2 pb-2">
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#666672]">
               分类
             </span>
-            <button
-              type="button"
-              className="flex h-6 w-6 items-center justify-center rounded-md text-[#666672] hover:bg-white/[0.06] hover:text-white"
-              aria-label="新建分类"
-              title="分类由文档名称自动识别"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
           </div>
           <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto pb-3">
             {documentCategories.map((category) => (
@@ -581,10 +593,12 @@ function DocumentCard({
   document,
   onDelete,
   onProcess,
+  onCategoryChange,
 }: {
   document: DocumentItem;
   onDelete: (document: DocumentItem) => void;
   onProcess: (document: DocumentItem) => void;
+  onCategoryChange: (document: DocumentItem, category: Exclude<DocumentCategory["id"], "all">) => void;
 }) {
   const tags = [fileKind(document.mimeType), statusLabel(document.status), `${document.chunkCount} chunks`];
 
@@ -624,6 +638,26 @@ function DocumentCard({
             </span>
           ))}
         </div>
+        <label className="mt-3 flex items-center gap-2 text-[11px] text-[#777783]">
+          <span>分类</span>
+          <select
+            value={documentCategory(document)}
+            onChange={(event) =>
+              onCategoryChange(
+                document,
+                event.target.value as Exclude<DocumentCategory["id"], "all">,
+              )
+            }
+            className="min-w-0 flex-1 rounded-md border border-white/[0.08] bg-[#111118] px-2 py-1 text-[11px] text-[#d7d7df] outline-none focus:border-blue-400/40"
+            aria-label={`修改 ${document.filename} 的分类`}
+          >
+            {CATEGORY_OPTIONS.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       <div className="mt-4 flex items-center justify-between border-t border-white/[0.08] pt-3">
         <span className="text-[11px] text-[#666672]">
@@ -661,10 +695,12 @@ function DocumentRow({
   document,
   onDelete,
   onProcess,
+  onCategoryChange,
 }: {
   document: DocumentItem;
   onDelete: (document: DocumentItem) => void;
   onProcess: (document: DocumentItem) => void;
+  onCategoryChange: (document: DocumentItem, category: Exclude<DocumentCategory["id"], "all">) => void;
 }) {
   return (
     <article className="group flex items-center gap-4 rounded-xl border border-white/[0.08] bg-[#16161f] px-4 py-3 transition-all hover:border-blue-400/35 hover:shadow-sm">
@@ -696,6 +732,23 @@ function DocumentRow({
         <span className="w-16 text-right">{formatSize(document.size)}</span>
         <span className="w-24 text-right">{formatDate(document.createdAt)}</span>
       </div>
+      <select
+        value={documentCategory(document)}
+        onChange={(event) =>
+          onCategoryChange(
+            document,
+            event.target.value as Exclude<DocumentCategory["id"], "all">,
+          )
+        }
+        className="h-8 max-w-28 rounded-md border border-white/[0.08] bg-[#111118] px-2 text-[11px] text-[#d7d7df] outline-none focus:border-blue-400/40"
+        aria-label={`修改 ${document.filename} 的分类`}
+      >
+        {CATEGORY_OPTIONS.map((category) => (
+          <option key={category.id} value={category.id}>
+            {category.name}
+          </option>
+        ))}
+      </select>
       <button
         type="button"
         onClick={() => onProcess(document)}
@@ -730,6 +783,7 @@ export function KnowledgeBaseWorkspace() {
   const [layout, setLayout] = useState<"grid" | "list">("grid");
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadCategory, setUploadCategory] = useState<"auto" | Exclude<DocumentCategory["id"], "all">>("auto");
   const [error, setError] = useState("");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [mobileNoticeOpen, setMobileNoticeOpen] = useState(false);
@@ -740,7 +794,7 @@ export function KnowledgeBaseWorkspace() {
   const documentCategories = useMemo<DocumentCategory[]>(() => {
     const counts = new Map<DocumentCategory["id"], number>();
     for (const document of documents) {
-      const category = inferCategory(document.filename);
+      const category = documentCategory(document);
       counts.set(category, (counts.get(category) ?? 0) + 1);
     }
     return CATEGORY_NAMES.map((category) => ({
@@ -755,7 +809,7 @@ export function KnowledgeBaseWorkspace() {
   const filteredDocuments = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return documents.filter((document) => {
-      const matchesCategory = activeCategory === "all" || inferCategory(document.filename) === activeCategory;
+      const matchesCategory = activeCategory === "all" || documentCategory(document) === activeCategory;
       const matchesSearch = !keyword || document.filename.toLowerCase().includes(keyword);
       return matchesCategory && matchesSearch;
     });
@@ -809,6 +863,9 @@ export function KnowledgeBaseWorkspace() {
     const form = new FormData();
     form.append("file", file);
     form.append("filename", file.name);
+    if (uploadCategory !== "auto") {
+      form.append("category", uploadCategory);
+    }
     setUploading(true);
     setError("");
     try {
@@ -852,6 +909,32 @@ export function KnowledgeBaseWorkspace() {
       if (!preview) await api.delete(`/documents/${document.id}`);
       setDocuments((current) => current.filter((item) => item.id !== document.id));
     } catch (reason) {
+      setError(apiErrorMessage(reason));
+    }
+  }
+
+  async function updateDocumentCategory(
+    document: DocumentItem,
+    category: Exclude<DocumentCategory["id"], "all">,
+  ) {
+    const previousCategory = documentCategory(document);
+    setDocuments((current) =>
+      current.map((item) =>
+        item.id === document.id ? { ...item, category } : item,
+      ),
+    );
+    if (preview) return;
+
+    try {
+      await api.patch(`/documents/${document.id}/category`, { category });
+    } catch (reason) {
+      setDocuments((current) =>
+        current.map((item) =>
+          item.id === document.id
+            ? { ...item, category: previousCategory }
+            : item,
+        ),
+      );
       setError(apiErrorMessage(reason));
     }
   }
@@ -919,6 +1002,25 @@ export function KnowledgeBaseWorkspace() {
             >
               <Menu className="h-5 w-5" />
             </Button>
+            <select
+              value={uploadCategory}
+              onChange={(event) =>
+                setUploadCategory(
+                  event.target.value as
+                    | "auto"
+                    | Exclude<DocumentCategory["id"], "all">,
+                )
+              }
+              className="h-9 rounded-lg border border-white/[0.08] bg-[#16161f] px-2.5 text-xs text-[#d7d7df] outline-none focus:border-blue-400/40"
+              aria-label="上传文档分类"
+            >
+              <option value="auto">自动分类</option>
+              {CATEGORY_OPTIONS.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
             <div>
               <h1 className="text-base font-semibold text-[#e5e5e5]">{activeCategoryName}</h1>
               <p className="mt-1 text-[11px] text-[#666672]">
@@ -1080,6 +1182,9 @@ export function KnowledgeBaseWorkspace() {
                       document={document}
                       onDelete={(item) => void deleteDocument(item)}
                       onProcess={(item) => void processDocument(item)}
+                      onCategoryChange={(item, category) =>
+                        void updateDocumentCategory(item, category)
+                      }
                     />
                   ))}
                 </div>
@@ -1091,6 +1196,9 @@ export function KnowledgeBaseWorkspace() {
                       document={document}
                       onDelete={(item) => void deleteDocument(item)}
                       onProcess={(item) => void processDocument(item)}
+                      onCategoryChange={(item, category) =>
+                        void updateDocumentCategory(item, category)
+                      }
                     />
                   ))}
                 </div>

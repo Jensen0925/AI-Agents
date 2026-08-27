@@ -14,6 +14,7 @@ import {
   documents as demoDocuments,
   mapDocumentRecord,
   type Category,
+  type DocumentCategoryId,
   type DocumentRecord,
   type KnowledgeDoc,
 } from "@/lib/knowledge-data"
@@ -119,7 +120,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
     void loadDocuments()
   }, [loadDocuments, router])
 
-  async function uploadDocument(file: File) {
+  async function uploadDocument(file: File, category?: DocumentCategoryId) {
     if (demo) {
       setDocumentsError("演示身份只能浏览示例文档，请使用真实账号上传文件。")
       return
@@ -130,6 +131,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
       const formData = new FormData()
       formData.append("file", file)
       formData.append("filename", file.name)
+      if (category) formData.append("category", category)
       const { data } = await api.post<DocumentRecord>("/documents/upload", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       })
@@ -140,6 +142,32 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
       setDocumentsError(apiErrorMessage(reason))
     } finally {
       setUploading(false)
+    }
+  }
+
+  async function updateDocumentCategory(
+    document: KnowledgeDoc,
+    category: DocumentCategoryId,
+  ) {
+    if (demo) {
+      setDocumentsError("演示身份不能修改文档分类，请使用真实账号。")
+      return
+    }
+
+    const previousCategory = document.category
+    setDocuments((current) =>
+      current.map((item) => (item.id === document.id ? { ...item, category } : item)),
+    )
+    setDocumentsError("")
+    try {
+      await api.patch(`/documents/${document.id}/category`, { category })
+    } catch (reason) {
+      setDocuments((current) =>
+        current.map((item) =>
+          item.id === document.id ? { ...item, category: previousCategory } : item,
+        ),
+      )
+      setDocumentsError(apiErrorMessage(reason))
     }
   }
 
@@ -302,6 +330,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
             error={documentsError}
             uploading={uploading}
             onUpload={uploadDocument}
+            onDocumentCategoryChange={updateDocumentCategory}
             onProcess={processDocument}
             onDelete={deleteDocument}
             onPreview={setPreviewDocument}

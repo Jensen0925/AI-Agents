@@ -7,7 +7,10 @@ import { join, resolve } from "node:path";
 import { JwtAuthGuard } from "../src/auth/jwt-auth.guard";
 import type { ChunkService } from "../src/document/chunk.service";
 import { DocumentController } from "../src/document/document.controller";
-import { DocumentService } from "../src/document/document.service";
+import {
+  DocumentService,
+  inferDocumentCategory,
+} from "../src/document/document.service";
 import type { PrismaService } from "../src/prisma/prisma.service";
 
 const temporaryDirectories: string[] = [];
@@ -84,12 +87,60 @@ describe("DocumentService", () => {
     await access(absolutePath);
     expect(document.status).toBe("pending");
     expect(document.userId).toBe("user-1");
+    expect(document.category).toBe("product");
 
     await service.delete(document.id, "user-1");
     await expect(access(absolutePath)).rejects.toThrow();
     expect(deleteDocument).toHaveBeenCalledWith({
       where: { id: "document-1" },
     });
+  });
+
+  it("infers a category on upload and allows the owner to update it", async () => {
+    expect(inferDocumentCategory("API 安全规范.pdf")).toBe("engineering");
+    expect(inferDocumentCategory("员工考勤制度.docx")).toBe("hr");
+    expect(inferDocumentCategory("requirement.md")).toBe("product");
+    expect(inferDocumentCategory("UI design.pdf")).toBe("design");
+
+    const storedDocument = {
+      id: "document-category",
+      userId: "user-1",
+      filename: "API 安全规范.pdf",
+      mimeType: "application/pdf",
+      size: 10,
+      filePath: "uploads/user-1/document.pdf",
+      storageType: "local",
+      category: "engineering",
+      status: "pending",
+      chunkCount: 0,
+      createdAt: new Date(),
+    } as Document;
+    const update = mock(async ({ data }: { data: { category: string } }) => ({
+      ...storedDocument,
+      ...data,
+    }));
+    const prisma = {
+      document: {
+        findFirst: mock(async () => storedDocument),
+        update,
+      },
+    } as unknown as PrismaService;
+    const service = new DocumentService(prisma, {} as ChunkService);
+
+    const updated = await service.updateCategory(
+      storedDocument.id,
+      "user-1",
+      "design",
+    );
+
+    expect(updated.category).toBe("design");
+    expect(update).toHaveBeenCalledWith({
+      where: { id: storedDocument.id },
+      data: { category: "design" },
+    });
+    await expect(
+      service.updateCategory(storedDocument.id, "user-1", "unknown"),
+    ).rejects.toThrow("Invalid document category");
   });
 
   it("reads the original markdown file for an authorized preview", async () => {

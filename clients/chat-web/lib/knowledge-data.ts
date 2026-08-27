@@ -1,9 +1,16 @@
 export type DocStatus = "已索引" | "处理中" | "待处理" | "处理失败"
 
+export type DocumentCategoryId =
+  | "product"
+  | "engineering"
+  | "hr"
+  | "sales"
+  | "design"
+
 export type KnowledgeDoc = {
   id: string
   title: string
-  category: string
+  category: DocumentCategoryId
   type: "PDF" | "Markdown" | "Word" | "网页" | "表格"
   summary: string
   updatedAt: string
@@ -18,7 +25,7 @@ export type KnowledgeDoc = {
 }
 
 export type Category = {
-  id: string
+  id: "all" | DocumentCategoryId
   name: string
   count: number
 }
@@ -41,16 +48,30 @@ export type DocumentRecord = {
   chunkCount: number
   createdAt: string
   filePath?: string | null
+  category?: DocumentCategoryId
 }
 
 export const categoryDefinitions = categories.map(({ id, name }) => ({ id, name }))
+export const documentCategoryDefinitions = categoryDefinitions.filter(
+  (category): category is { id: DocumentCategoryId; name: string } => category.id !== "all",
+)
 
-export function inferDocumentCategory(filename: string): string {
+export function inferDocumentCategory(filename: string): DocumentCategoryId {
   const value = filename.toLowerCase()
-  if (/设计|ui|ux|视觉|组件|样式|交互/.test(value)) return "design"
+  if (
+    /设计|视觉|组件|样式|交互/.test(value) ||
+    /(^|[^a-z0-9])(ui|ux)([^a-z0-9]|$)/.test(value)
+  ) {
+    return "design"
+  }
   if (/员工|人事|考勤|绩效|福利|招聘|薪酬/.test(value)) return "hr"
   if (/销售|市场|客户|报价|商务|营销/.test(value)) return "sales"
-  if (/技术|架构|api|接口|开发|数据库|安全|部署|运维|代码|规范/.test(value)) return "engineering"
+  if (
+    /技术|架构|接口|开发|数据库|安全|部署|运维|代码|规范/.test(value) ||
+    /(^|[^a-z0-9])api([^a-z0-9]|$)/.test(value)
+  ) {
+    return "engineering"
+  }
   return "product"
 }
 
@@ -89,7 +110,7 @@ export function mapDocumentRecord(record: DocumentRecord): KnowledgeDoc {
   return {
     id: record.id,
     title: record.filename,
-    category: inferDocumentCategory(record.filename),
+    category: record.category ?? inferDocumentCategory(record.filename),
     type: documentType(record.mimeType),
     summary:
       record.status === "done"

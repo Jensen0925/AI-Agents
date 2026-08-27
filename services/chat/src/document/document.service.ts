@@ -15,6 +15,40 @@ import { ChunkService } from "./chunk.service";
 
 export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024;
 
+export const DOCUMENT_CATEGORY_IDS = [
+  "product",
+  "engineering",
+  "hr",
+  "sales",
+  "design",
+] as const;
+
+export type DocumentCategoryId = (typeof DOCUMENT_CATEGORY_IDS)[number];
+
+export function isDocumentCategoryId(value: string): value is DocumentCategoryId {
+  return (DOCUMENT_CATEGORY_IDS as readonly string[]).includes(value);
+}
+
+export function inferDocumentCategory(filename: string): DocumentCategoryId {
+  const normalized = filename.toLocaleLowerCase();
+  if (
+    /设计|视觉|组件|样式|交互/u.test(normalized) ||
+    /(^|[^a-z0-9])(ui|ux)([^a-z0-9]|$)/u.test(normalized)
+  ) {
+    return "design";
+  }
+  if (/员工|人事|考勤|绩效|福利|招聘|薪酬/u.test(normalized)) return "hr";
+  if (/销售|市场|客户|报价|商务|营销/u.test(normalized)) return "sales";
+  if (
+    /技术|架构|接口|开发|数据库|安全|部署|运维|代码|规范/u.test(
+      normalized,
+    ) || /(^|[^a-z0-9])api([^a-z0-9]|$)/u.test(normalized)
+  ) {
+    return "engineering";
+  }
+  return "product";
+}
+
 export const ALLOWED_DOCUMENT_MIME_TYPES = new Set([
   "text/plain",
   "text/markdown",
@@ -82,8 +116,15 @@ export class DocumentService {
     userId: string,
     file: UploadedDocumentFile,
     filename: string,
+    category?: string,
   ): Promise<Document> {
     this.validateFile(file);
+    const normalizedFilename = filename || file.originalname;
+    const normalizedCategory = category?.trim();
+    if (normalizedCategory && !isDocumentCategoryId(normalizedCategory)) {
+      throw new BadRequestException("Invalid document category");
+    }
+    const documentCategory = normalizedCategory ?? inferDocumentCategory(normalizedFilename);
 
     const safeUserId = sanitizePathSegment(userId, "anonymous");
     const safeFilename = sanitizePathSegment(
@@ -109,6 +150,7 @@ export class DocumentService {
           size: file.size,
           filePath: storedPath,
           storageType: "local",
+          category: documentCategory,
           status: "pending",
         },
       });
@@ -123,6 +165,24 @@ export class DocumentService {
     return this.prisma.document.findMany({
       where: { userId },
       orderBy: { createdAt: "desc" },
+    });
+  }
+
+  /** 更新文档分类，分类修改不需要重新解析已有向量。 */
+  async updateCategory(
+    documentId: string,
+    userId: string,
+    category: string,
+  ): Promise<Document> {
+    const normalizedCategory = category.trim();
+    if (!isDocumentCategoryId(normalizedCategory)) {
+      throw new BadRequestException("Invalid document category");
+    }
+
+    await this.findById(documentId, userId);
+    return this.prisma.document.update({
+      where: { id: documentId },
+      data: { category: normalizedCategory },
     });
   }
 

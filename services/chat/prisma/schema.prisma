@@ -82,6 +82,7 @@ model Document {
   size        Int
   filePath    String?
   storageType String          @default("local")
+  category    String          @default("product")
   status      String          @default("pending")
   chunkCount  Int             @default(0)
   createdAt   DateTime        @default(now())

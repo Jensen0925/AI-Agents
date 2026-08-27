@@ -2,7 +2,13 @@
 
 import { useMemo, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
-import type { Category, DocStatus, KnowledgeDoc } from "@/lib/knowledge-data"
+import {
+  documentCategoryDefinitions,
+  type Category,
+  type DocStatus,
+  type DocumentCategoryId,
+  type KnowledgeDoc,
+} from "@/lib/knowledge-data"
 import { Button } from "@/components/ui/button"
 import {
   FileSpreadsheet,
@@ -41,7 +47,11 @@ type DocumentsViewProps = {
   loading: boolean
   error: string
   uploading: boolean
-  onUpload: (file: File) => Promise<void>
+  onUpload: (file: File, category?: DocumentCategoryId) => Promise<void>
+  onDocumentCategoryChange: (
+    document: KnowledgeDoc,
+    category: DocumentCategoryId,
+  ) => Promise<void>
   onProcess: (document: KnowledgeDoc) => Promise<void>
   onDelete: (document: KnowledgeDoc) => Promise<void>
   onPreview: (document: KnowledgeDoc) => void
@@ -56,12 +66,14 @@ export function DocumentsView({
   error,
   uploading,
   onUpload,
+  onDocumentCategoryChange,
   onProcess,
   onDelete,
   onPreview,
 }: DocumentsViewProps) {
   const [query, setQuery] = useState("")
   const [layout, setLayout] = useState<"grid" | "list">("grid")
+  const [uploadCategory, setUploadCategory] = useState<"auto" | DocumentCategoryId>("auto")
   const inputRef = useRef<HTMLInputElement>(null)
 
   const filtered = useMemo(() => {
@@ -82,7 +94,9 @@ export function DocumentsView({
   async function selectFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     event.target.value = ""
-    if (file) await onUpload(file)
+    if (file) {
+      await onUpload(file, uploadCategory === "auto" ? undefined : uploadCategory)
+    }
   }
 
   return (
@@ -102,15 +116,36 @@ export function DocumentsView({
             accept=".txt,.md,.markdown,.pdf,.doc,.docx,text/plain,text/markdown,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             onChange={(event) => void selectFile(event)}
           />
-          <Button
-            size="lg"
-            className="gap-2"
-            disabled={uploading}
-            onClick={() => inputRef.current?.click()}
-          >
-            {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
-            {uploading ? "正在上传" : "上传文档"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <label className="sr-only" htmlFor="upload-category">
+              上传文档分类
+            </label>
+            <select
+              id="upload-category"
+              value={uploadCategory}
+              disabled={uploading}
+              onChange={(event) =>
+                setUploadCategory(event.target.value as "auto" | DocumentCategoryId)
+              }
+              className="h-11 rounded-xl border border-input bg-card px-3 text-sm text-foreground outline-none transition-colors focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:opacity-50"
+            >
+              <option value="auto">自动分类</option>
+              {documentCategoryDefinitions.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="lg"
+              className="gap-2"
+              disabled={uploading}
+              onClick={() => inputRef.current?.click()}
+            >
+              {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+              {uploading ? "正在上传" : "上传文档"}
+            </Button>
+          </div>
         </div>
 
         <div className="mt-5 flex items-center gap-3">
@@ -189,13 +224,27 @@ export function DocumentsView({
         ) : layout === "grid" ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {filtered.map((document) => (
-              <DocCard key={document.id} document={document} onProcess={onProcess} onDelete={onDelete} onPreview={onPreview} />
+              <DocCard
+                key={document.id}
+                document={document}
+                onCategoryChange={onDocumentCategoryChange}
+                onProcess={onProcess}
+                onDelete={onDelete}
+                onPreview={onPreview}
+              />
             ))}
           </div>
         ) : (
           <div className="flex flex-col gap-2">
             {filtered.map((document) => (
-              <DocRow key={document.id} document={document} onProcess={onProcess} onDelete={onDelete} onPreview={onPreview} />
+              <DocRow
+                key={document.id}
+                document={document}
+                onCategoryChange={onDocumentCategoryChange}
+                onProcess={onProcess}
+                onDelete={onDelete}
+                onPreview={onPreview}
+              />
             ))}
           </div>
         )}
@@ -206,9 +255,34 @@ export function DocumentsView({
 
 type DocumentActions = {
   document: KnowledgeDoc
+  onCategoryChange: (
+    document: KnowledgeDoc,
+    category: DocumentCategoryId,
+  ) => Promise<void>
   onProcess: (document: KnowledgeDoc) => Promise<void>
   onDelete: (document: KnowledgeDoc) => Promise<void>
   onPreview: (document: KnowledgeDoc) => void
+}
+
+function CategorySelect({ document, onCategoryChange }: DocumentActions) {
+  return (
+    <select
+      value={document.category}
+      aria-label={`修改 ${document.title} 的分类`}
+      onClick={(event) => event.stopPropagation()}
+      onChange={(event) => {
+        event.stopPropagation()
+        void onCategoryChange(document, event.target.value as DocumentCategoryId)
+      }}
+      className="h-8 rounded-lg border border-input bg-card px-2 text-xs text-foreground outline-none transition-colors hover:border-ring/50 focus:border-ring focus:ring-2 focus:ring-ring/20"
+    >
+      {documentCategoryDefinitions.map((category) => (
+        <option key={category.id} value={category.id}>
+          {category.name}
+        </option>
+      ))}
+    </select>
+  )
 }
 
 function ActionButtons({ document, onProcess, onDelete, onPreview }: DocumentActions) {
@@ -297,6 +371,9 @@ function DocCard(props: DocumentActions) {
           </span>
         ))}
       </div>
+      <div className="mt-3" onClick={(event) => event.stopPropagation()}>
+        <CategorySelect {...props} />
+      </div>
       <div className="mt-4 flex items-center justify-between border-t border-border pt-3 text-xs text-muted-foreground">
         <span>{document.type} · {document.size}</span>
         <span>{document.updatedAt}</span>
@@ -339,6 +416,7 @@ function DocRow(props: DocumentActions) {
       <div className="hidden shrink-0 items-center gap-6 text-xs text-muted-foreground sm:flex">
         <span className="w-16 text-right">{document.type}</span>
         <span className="w-16 text-right">{document.updatedAt}</span>
+        <CategorySelect {...props} />
         <ActionButtons {...props} />
       </div>
     </article>
