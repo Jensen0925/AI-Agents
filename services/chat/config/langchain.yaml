@@ -1,4 +1,5 @@
 llm:
+  # 模型名可通过 OPENAI_MODEL 和 OPENAI_MODEL_* 环境变量覆盖。
   model: deepseek-v4-pro
   modelTiers:
     high: deepseek-v4-pro

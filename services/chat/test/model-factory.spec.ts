@@ -35,7 +35,7 @@ describe("模型网关地址兼容", () => {
 describe("模型分档配置驱动", () => {
   const llm = loadLangchainConfig().llm;
 
-  test("high / medium / compressor 档位映射到 YAML 配置", () => {
+  test("high / medium / compressor 档位映射到集中配置", () => {
     expect(resolveModelName({ tier: "high" }, llm)).toBe(llm.modelTiers.high);
     expect(resolveModelName({ tier: "medium" }, llm)).toBe(
       llm.modelTiers.medium,
@@ -60,7 +60,7 @@ describe("模型分档配置驱动", () => {
     );
   });
 
-  test("三层推理级别映射到 YAML 中的模型档位", () => {
+  test("三层推理级别映射到集中配置的模型档位", () => {
     expect(resolveModelName({ reasoningLevel: "light" }, llm)).toBe(
       llm.modelTiers.compressor,
     );
@@ -76,6 +76,32 @@ describe("模型分档配置驱动", () => {
     expect(resolveReasoningEffort({ reasoningLevel: "deep" }, llm)).toBe(
       "high",
     );
+  });
+});
+
+describe("模型环境变量配置", () => {
+  test("OPENAI_MODEL 可作为所有档位的统一模型", () => {
+    const script = `
+      process.env.OPENAI_MODEL = "env-model";
+      delete process.env.OPENAI_MODEL_HIGH;
+      delete process.env.OPENAI_MODEL_MEDIUM;
+      delete process.env.OPENAI_MODEL_COMPRESSOR;
+      const { loadLangchainConfig } = await import("./src/config/load-langchain-config.ts");
+      console.log(JSON.stringify(loadLangchainConfig().llm));
+    `;
+    const processResult = Bun.spawnSync(["bun", "-e", script], {
+      cwd: process.cwd(),
+      env: { ...process.env, OPENAI_MODEL: "env-model" },
+    });
+
+    expect(processResult.exitCode).toBe(0);
+    const llm = JSON.parse(processResult.stdout.toString());
+    expect(llm.model).toBe("env-model");
+    expect(llm.modelTiers).toEqual({
+      high: "env-model",
+      medium: "env-model",
+      compressor: "env-model",
+    });
   });
 });
 

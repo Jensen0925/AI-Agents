@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { load } from "js-yaml";
 
-// YAML 的类型只描述可安全落盘的运行参数，不包含密钥或服务地址。
+// YAML 提供运行参数默认值；模型名、密钥和服务地址均可由环境变量配置。
 export interface LangchainConfig {
   llm: {
     model: string;
@@ -190,13 +190,24 @@ export function loadLangchainConfig(): LangchainConfig {
   assertRecord(tools, "tools");
   assertRecord(features, "features");
 
+  const defaultModel = optionalEnv("OPENAI_MODEL") ?? readString(llm, "model");
+
   cachedConfig = {
     llm: {
-      model: readString(llm, "model"),
+      model: defaultModel,
       modelTiers: {
-        high: readString(llm.modelTiers, "high"),
-        medium: readString(llm.modelTiers, "medium"),
-        compressor: readString(llm.modelTiers, "compressor"),
+        high:
+          optionalEnv("OPENAI_MODEL_HIGH") ??
+          optionalEnv("OPENAI_MODEL") ??
+          readString(llm.modelTiers, "high"),
+        medium:
+          optionalEnv("OPENAI_MODEL_MEDIUM") ??
+          optionalEnv("OPENAI_MODEL") ??
+          readString(llm.modelTiers, "medium"),
+        compressor:
+          optionalEnv("OPENAI_MODEL_COMPRESSOR") ??
+          optionalEnv("OPENAI_MODEL") ??
+          readString(llm.modelTiers, "compressor"),
       },
       reasoningEffort: readReasoningEffort(llm, "reasoningEffort"),
       temperature: readNumber(llm, "temperature"),
@@ -230,7 +241,7 @@ export function loadLangchainConfig(): LangchainConfig {
 }
 
 /**
- * 从 process.env 获取模型、Embedding 与向量库连接信息。
+ * 从 process.env 获取模型网关、Embedding 与向量库连接信息。
  *
  * OPENAI_API_KEY 是创建聊天模型的必填项；其余字段为后续能力预留。
  */

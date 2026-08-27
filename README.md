@@ -65,6 +65,13 @@ docker compose -f infra/compose/compose.yaml up -d postgres
 然后在 `services/chat/.env` 配置：
 
 ```dotenv
+OPENAI_API_KEY=replace-with-your-api-key
+OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
+OPENAI_MODEL=deepseek-v4-pro
+# 可选：需要分档模型时分别配置；未配置则统一使用 OPENAI_MODEL
+OPENAI_MODEL_HIGH=deepseek-v4-pro
+OPENAI_MODEL_MEDIUM=deepseek-v4-flash
+OPENAI_MODEL_COMPRESSOR=deepseek-v4-flash
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/cloudsage
 JWT_SECRET=replace-with-a-long-local-secret
 PORT=3001

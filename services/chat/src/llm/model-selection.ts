@@ -1,23 +1,23 @@
 export type ReasoningEffort = "medium" | "high";
 
-/** 面向业务路由的三层推理级别。模型档位仍由 YAML 集中配置。 */
+/** 面向业务路由的三层推理级别。模型档位由环境变量覆盖 YAML 默认值。 */
 export type ReasoningLevel = "light" | "standard" | "deep";
 
-/** 与 langchain.yaml 的 llm.modelTiers 对应的模型档位。 */
+/** 与 OPENAI_MODEL_* / langchain.yaml llm.modelTiers 对应的模型档位。 */
 export type ModelTier = "high" | "medium" | "compressor";
 
 export interface ModelSelectionOptions {
   /**
-   * 主分析链默认使用 YAML 中的 high；独立轻量节点可显式传 medium。
+   * 主分析链默认使用 high 档；独立轻量节点可显式传 medium。
    * 项目不再使用 low，以免影响分类、工具选择和业务结论质量。
    */
   reasoningEffort?: ReasoningEffort;
   /**
-   * 允许评测或一次性脚本显式覆盖模型，常规业务调用仍使用集中 YAML 配置。
+   * 允许评测或一次性脚本显式覆盖模型，常规业务调用使用集中环境配置。
    */
   modelName?: string;
   /**
-   * 按档位从 YAML 的 llm.modelTiers 选择模型；未传时使用 llm.model 默认模型。
+   * 按档位选择环境配置的模型；未传时使用 OPENAI_MODEL 默认模型。
    */
   tier?: ModelTier;
   /**

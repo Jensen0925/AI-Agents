@@ -36,7 +36,7 @@ export const DEFAULT_AGENT_MODEL_SET: AgentModelSet = {
 };
 
 /** 高风险节点使用 Pro，轻量/省钱节点使用 Flash，按节点角色分档。
- * 实际发送给网关的模型名由 config/langchain.yaml 的 llm.model/modelTiers 决定，此处为成本台账配置 ID。 */
+ * 实际发送给网关的模型名优先由 OPENAI_MODEL_* 环境变量决定，此处为成本台账配置 ID。 */
 export const AGENT_REASONING_EFFORT: Record<AgentName, "medium" | "high"> = {
   supervisor: "high",
   functional_expert: "medium",
