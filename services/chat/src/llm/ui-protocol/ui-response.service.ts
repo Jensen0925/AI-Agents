@@ -78,7 +78,7 @@ function contentToText(content: unknown): string {
     .join("");
 }
 
-function toHistoryMessages(history: unknown): BaseMessage[] {
+export function toHistoryMessages(history: unknown): BaseMessage[] {
   if (!Array.isArray(history)) {
     return [];
   }
@@ -100,14 +100,16 @@ function toHistoryMessages(history: unknown): BaseMessage[] {
     }
 
     const role = item.role ?? item.type;
-    if (role === "system") {
-      return [new SystemMessage(text)];
-    }
-
-    if (role === "assistant" || role === "ai" || role === "AIMessage") {
+    if (
+      role === "assistant" ||
+      role === "ASSISTANT" ||
+      role === "ai" ||
+      role === "AIMessage"
+    ) {
       return [new AIMessage(text)];
     }
 
+    // HTTP 调用方不能通过伪造 system 角色覆盖服务端系统提示词。
     return [new HumanMessage(text)];
   });
 }
@@ -155,23 +157,17 @@ function requirementDetailCard(input: string): AIUIResponse {
   const requirementId = input.match(/REQ-[A-Za-z0-9-]+/i)?.[0] ?? "未识别";
 
   return {
-    message: `已准备需求 ${requirementId} 的详情卡片。`,
+    message: `已识别需求编号 ${requirementId}，但当前 UI 接口尚未接入需求主数据源，不能展示真实状态。`,
     components: [
       {
         type: "card",
         id: `requirement-${requirementId}`,
         title: `需求 ${requirementId}`,
-        subtitle: "需求详情",
-        status: "待分析",
+        subtitle: "数据源未连接",
+        status: "不可查询",
         fields: [
           { key: "requirementId", label: "需求单号", value: requirementId },
-          { key: "title", label: "标题", value: "待从需求库加载" },
-          { key: "priority", label: "优先级", value: "未设置" },
-          { key: "acceptanceCriteria", label: "验收标准", value: "待补充" },
-        ],
-        actions: [
-          { label: "开始分析", action: "start_analysis", variant: "default" },
-          { label: "补充信息", action: "edit_requirement", variant: "secondary" },
+          { key: "availability", label: "查询状态", value: "需求数据源尚未接入" },
         ],
       },
     ],
@@ -213,7 +209,7 @@ function analysisSubmissionResponse(): AIUIResponse {
 }
 
 function detectCanonicalScenario(input: string): "selection" | "card" | "analysis" | undefined {
-  if (/我要提一个新需求|提一个新需求/.test(input)) {
+  if (/^(?:(?:我|我们)?(?:要|想要|需要)?|请)?(?:提|新建|创建|提交)(?:一个|一条)?新需求(?:\s*[:：].*)?$/.test(input.trim())) {
     return "selection";
   }
 

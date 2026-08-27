@@ -53,7 +53,7 @@ interface RetrievedDocument {
 
 interface ConversationChatResponse {
   report: string | null;
-  intent: "analyze" | "query" | "chat";
+  intent: "analyze" | "query" | "chat" | "knowledge";
   summary: string;
   clarificationQuestions: string[];
   usedAgents: string[];
@@ -82,8 +82,8 @@ function uiEndpoint(path: "chat" | "action"): string {
 
 /** 需求类型选择等交互流程继续使用 UI 状态机；普通对话走会话统一入口。 */
 function shouldUseUiFlow(input: string): boolean {
-  return /我要提一个新需求|提一个新需求|查看需求\s*REQ-[A-Za-z0-9-]+|提交需求分析/.test(
-    input,
+  return /^(?:(?:我|我们)?(?:要|想要|需要)?|请)?(?:提|新建|创建|提交)(?:一个|一条)?新需求(?:\s*[:：].*)?$/.test(
+    input.trim(),
   );
 }
 

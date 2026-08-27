@@ -3,6 +3,7 @@ import {
   type BaseMessage,
   HumanMessage,
   type MessageContent,
+  SystemMessage,
 } from "@langchain/core/messages";
 import { Injectable, Logger } from "@nestjs/common";
 import {
@@ -34,6 +35,11 @@ import { ArtifactService } from "../artifact/artifact.service";
 import { createConversationTitle } from "../conversation/conversation-title";
 import { PrismaService } from "../prisma/prisma.service";
 import { TokenUsageService } from "./cost/token-usage.service";
+import {
+  classifyConversationRoute,
+  isRequirementFollowupAnswer,
+  type ConversationRoute,
+} from "./conversation-route";
 
 export interface AdvancedAnalysisResult {
   report: string | null;
@@ -42,7 +48,7 @@ export interface AdvancedAnalysisResult {
   /** 模型链路失败后的降级方式。 */
   fallback?: "manual_review" | null;
   /** 本轮意图，供前端决定展示聊天、查询或需求分析结果。 */
-  intent?: RequirementIntent;
+  intent?: RequirementIntent | "knowledge";
   /** LangGraph 的兼容摘要字段；普通闲聊/查询也会填充。 */
   summary?: string;
   clarificationQuestions?: string[];
@@ -121,6 +127,7 @@ const ANALYSIS_STEPS = new Set<AnalysisGraphStep>([
   "riskOnlyHandler",
   "queryHandler",
   "chatHandler",
+  "knowledgeHandler",
 ]);
 
 function isAnalysisStep(value: unknown): value is AnalysisGraphStep {
@@ -485,6 +492,98 @@ function createLocalChatResponse(input: string): string {
   return "你好！我是 CloudSage 需求分析助手。你可以直接描述想做的功能，或让我帮你分析、查询和拆解需求。";
 }
 
+function shouldUseLocalChatResponse(input: string): boolean {
+  return /^(?:你好|您好|嗨|hi|hello|谢谢|感谢|再见)|什么模型|哪个模型|模型版本|天气|气温|下雨|晴|你能做什么|有什么能力|帮助/iu.test(
+    input,
+  );
+}
+
+function hasActiveRequirementClarification(history: BaseMessage[]): boolean {
+  const recentMessages = history.slice(-8);
+  const hasRequirementStart = recentMessages.some(
+    (message) =>
+      message.getType() === "human" &&
+      classifyConversationRoute(contentToText(message.content)) ===
+        "requirement_analysis",
+  );
+  const hasClarificationPrompt = recentMessages.some(
+    (message) =>
+      message.getType() !== "human" &&
+      /为了把需求设计准确|请补充以下信息|正在完善|登录方式选哪一种|用户角色有哪些|安全规则需要哪些|登录成功后/iu.test(
+        contentToText(message.content),
+      ),
+  );
+  return hasRequirementStart && hasClarificationPrompt;
+}
+
+async function answerDirectly(
+  input: string,
+  history: BaseMessage[],
+  timeoutMs: number,
+): Promise<string> {
+  if (shouldUseLocalChatResponse(input)) {
+    return createLocalChatResponse(input);
+  }
+
+  try {
+    const model = createChatModel({ reasoningLevel: "light" });
+    const response = await withDeadline(
+      model.invoke([
+        new SystemMessage(
+          [
+            "你是 CloudSage 的通用 AI 助手。",
+            "直接回答用户当前的问题；技术概念、编程问题和知识解释不要转换成需求采集。",
+            "只有用户明确提出要开发功能、提交需求或生成需求分析报告时，才进入需求澄清。",
+            "回答应准确、简洁；不知道时明确说明，不要虚构内部数据或知识库来源。",
+          ].join("\n"),
+        ),
+        ...history.slice(-6),
+        new HumanMessage(input),
+      ]),
+      timeoutMs,
+    );
+    const content = contentToText(response.content).trim();
+    return content || "模型没有生成可展示的回答，请换一种方式提问。";
+  } catch {
+    return "模型服务暂时不可用，当前问题无法直接回答，请稍后重试。";
+  }
+}
+
+async function answerFromKnowledgeBase(
+  input: string,
+  documents: DocumentSearchResult[],
+  timeoutMs: number,
+): Promise<string> {
+  if (documents.length === 0) {
+    return `知识库中没有找到与“${input}”相关的内容。你可以补充或上传相关文档，也可以去掉“知识库/内部文档”等限定后改为通用模型问答。`;
+  }
+
+  try {
+    const model = createChatModel({ reasoningLevel: "standard" });
+    const response = await withDeadline(
+      model.invoke([
+        new SystemMessage(
+          [
+            "你是知识库问答助手，只能依据提供的知识库片段回答。",
+            "如果片段不足以支持结论，要明确说明信息不足；禁止把常识当成知识库内容补写。",
+            "回答中使用“知识库显示/文档提到”等措辞，并保持简洁。",
+          ].join("\n"),
+        ),
+        new HumanMessage(
+          [`用户问题：${input}`, formatRetrievedContext(documents)].join(
+            "\n\n",
+          ),
+        ),
+      ]),
+      timeoutMs,
+    );
+    const content = contentToText(response.content).trim();
+    return content || "已检索到相关知识库内容，但模型没有生成可展示的回答。";
+  } catch {
+    return "已检索到相关知识库内容，但模型服务暂时不可用，无法生成基于文档的回答。";
+  }
+}
+
 function hasOrderQueryContext(input: string, history: BaseMessage[]): boolean {
   return (
     /(订单|物流|发货|退款单|支付单)/iu.test(input) ||
@@ -809,7 +908,7 @@ export class AdvancedAnalysisService {
 
     // 轻量请求不应进入检索和多 Agent 图：闲聊直接回复，短需求先澄清。
     // 这也避免模型网关超时后把所有输入都误包装成同一份固定报告。
-    const keywordIntent = classifyIntentByKeywords(normalizedInput);
+    const initialRoute = classifyConversationRoute(normalizedInput);
     const hasLoginConversation = history.some(
       (message) =>
         message.getType() === "human" &&
@@ -822,24 +921,40 @@ export class AdvancedAnalysisService {
       hasLoginConversation &&
       isLoginClarificationAnswer(normalizedInput) &&
       !requestsFullAnalysis(normalizedInput);
-    const effectiveIntent: RequirementIntent = isLoginFollowup
-      ? "analyze"
-      : keywordIntent;
+    const shouldInheritRequirement =
+      initialRoute === "direct" &&
+      hasActiveRequirementClarification(history) &&
+      isRequirementFollowupAnswer(normalizedInput);
+    const conversationRoute: ConversationRoute =
+      isLoginFollowup || shouldInheritRequirement
+        ? "requirement_analysis"
+        : initialRoute;
+    const effectiveIntent: RequirementIntent =
+      conversationRoute === "requirement_analysis"
+        ? "analyze"
+        : conversationRoute === "requirement_query"
+          ? "query"
+          : "chat";
+    const hasCurrentOrderEntity =
+      /(订单|物流|发货|退款单|支付单)/iu.test(normalizedInput);
+    const asksWhyOrderUnavailable =
+      /(为什么|为何|怎么不能|不能查询|查不了|无法查询)/iu.test(
+        normalizedInput,
+      ) && hasOrderQueryContext(normalizedInput, history);
     const shouldHandleOrderQuery =
-      effectiveIntent === "query" &&
-      hasOrderQueryContext(normalizedInput, history);
+      hasCurrentOrderEntity || asksWhyOrderUnavailable;
     const shouldUseQuickPath =
-      effectiveIntent === "chat" ||
       shouldHandleOrderQuery ||
       (effectiveIntent === "analyze" &&
         (isBriefRequirement(normalizedInput) ||
           isLoginFollowup) &&
         !requestsFullAnalysis(normalizedInput));
     if (shouldUseQuickPath) {
+      const quickIntent: RequirementIntent = shouldHandleOrderQuery
+        ? "query"
+        : effectiveIntent;
       const quickResult =
-        effectiveIntent === "chat"
-          ? localFallbackResult(normalizedInput, [])
-          : shouldHandleOrderQuery
+        shouldHandleOrderQuery
             ? createOrderQueryResult(normalizedInput, history)
           : createBriefClarificationResult(normalizedInput, history);
       const conclusion = analysisConclusion(quickResult);
@@ -861,11 +976,11 @@ export class AdvancedAnalysisService {
       return {
         report: null,
         status:
-          effectiveIntent === "analyze"
+          quickIntent === "analyze"
             ? "clarification_required"
             : "completed",
         fallback: null,
-        intent: effectiveIntent,
+        intent: quickIntent,
         summary: conclusion,
         clarificationQuestions,
         usedAgents: [],
@@ -873,6 +988,38 @@ export class AdvancedAnalysisService {
         queryResponse: quickResult.queryResponse,
         chatResponse: quickResult.chatResponse,
         steps: quickResult.steps,
+      };
+    }
+
+    if (conversationRoute === "direct") {
+      const response = await answerDirectly(
+        normalizedInput,
+        history,
+        this.analysisTimeoutMs,
+      );
+      try {
+        await withDeadline(
+          chatHistory.addMessage(new AIMessage(response)),
+          Math.min(2_000, this.retrievalTimeoutMs),
+        );
+      } catch (error) {
+        this.logger.error(
+          `Assistant direct-answer persistence failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      return {
+        report: null,
+        status: "completed",
+        fallback: null,
+        intent: "chat",
+        summary: response,
+        clarificationQuestions: [],
+        usedAgents: [],
+        retrievedDocuments: [],
+        chatResponse: response,
+        steps: ["classifier", "chatHandler"],
       };
     }
 
@@ -894,7 +1041,9 @@ export class AdvancedAnalysisService {
         }`,
       );
     }
-    if (retrieval.enabled) {
+    const shouldRetrieve =
+      conversationRoute === "knowledge" || effectiveIntent === "analyze";
+    if (retrieval.enabled && shouldRetrieve) {
       try {
         retrievedDocuments = await withDeadline(
           this.searchService.search(
@@ -913,6 +1062,38 @@ export class AdvancedAnalysisService {
           }`,
         );
       }
+    }
+
+    if (conversationRoute === "knowledge") {
+      const response = await answerFromKnowledgeBase(
+        normalizedInput,
+        retrievedDocuments,
+        this.analysisTimeoutMs,
+      );
+      try {
+        await withDeadline(
+          chatHistory.addMessage(new AIMessage(response)),
+          Math.min(2_000, this.retrievalTimeoutMs),
+        );
+      } catch (error) {
+        this.logger.error(
+          `Assistant knowledge-answer persistence failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+      return {
+        report: null,
+        status: "completed",
+        fallback: null,
+        intent: "knowledge",
+        summary: response,
+        clarificationQuestions: [],
+        usedAgents: [],
+        retrievedDocuments,
+        queryResponse: response,
+        steps: ["classifier", "knowledgeHandler"],
+      };
     }
     const historyContext = history
       .map((message) => {

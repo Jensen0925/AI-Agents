@@ -33,7 +33,7 @@ type ApiMessage = {
 
 type AnalysisResponse = {
   report?: string | null
-  intent?: "analyze" | "query" | "chat"
+  intent?: "analyze" | "query" | "chat" | "knowledge"
   summary?: string | null
   queryResponse?: string | null
   chatResponse?: string | null
@@ -118,7 +118,7 @@ function uiComponentsFromMetadata(metadata: unknown): UIResponse[] | undefined {
 
 /** 需要确定性交互时才启用 UI Flow；其它输入保持现有知识库聊天体验。 */
 function shouldUseUiFlow(input: string): boolean {
-  return /我要提一个新需求|提一个新需求|查看需求\s*REQ-[A-Za-z0-9-]+|提交需求分析/.test(input)
+  return /^(?:(?:我|我们)?(?:要|想要|需要)?|请)?(?:提|新建|创建|提交)(?:一个|一条)?新需求(?:\s*[:：].*)?$/.test(input.trim())
 }
 
 function uiResponseText(response: AIUIResponse): string {

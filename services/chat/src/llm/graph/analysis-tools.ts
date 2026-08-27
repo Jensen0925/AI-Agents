@@ -4,21 +4,15 @@ import { z } from "zod";
 /**
  * ReAct 分析子图使用的需求查询工具。
  *
- * 当前仓库还没有把需求实体查询接到独立的需求服务，因此先提供一个
- * 确定性的 Mock 实现。后续接入数据库时只需要替换函数体，工具名称和
- * 输入协议保持不变，模型侧无需改动。
+ * 当前仓库还没有把需求实体查询接到用户级需求服务。工具必须明确返回
+ * “不可用”，不能用模拟状态污染真实分析结论。
  */
 export const searchRequirementTool = tool(
   async ({ reqId }) => {
     return JSON.stringify({
       reqId,
-      title: `需求 ${reqId}`,
-      status: "in_review",
-      summary: "这是一个供需求分析 Agent 使用的模拟需求详情。",
-      acceptanceCriteria: [
-        "核心功能边界明确",
-        "用户故事可以被验收标准覆盖",
-      ],
+      available: false,
+      message: "需求主数据源尚未接入，不能返回真实需求详情或状态。",
     });
   },
   {
@@ -77,4 +71,3 @@ export const checkConflictsTool = tool(
 
 /** ReAct Agent 可用的全部分析工具。 */
 export const analysisTools = [searchRequirementTool, checkConflictsTool];
-

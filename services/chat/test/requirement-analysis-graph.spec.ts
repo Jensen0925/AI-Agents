@@ -268,12 +268,15 @@ describe("requirement analysis graph", () => {
 
     expect(result.intent).toBe("query");
     expect(result.queryResponse).toBeTruthy();
+    expect(result.queryResponse).toContain("需求主数据源");
+    expect(result.queryResponse).not.toContain("需求查询结果");
     expect(result.summary).toBe(result.queryResponse!);
     expect(result.extracted).toBeUndefined();
     expect(result.analysisResult).toBeUndefined();
     expect(result.riskResult).toBeUndefined();
     expect(result.steps).toEqual(["classifier", "queryHandler"]);
     expect(extractInvoke).not.toHaveBeenCalled();
+    expect(invocationOrder).not.toContain("queryHandler");
   });
 
   it("routes casual chat through the short path in under five seconds", async () => {
@@ -296,6 +299,8 @@ describe("requirement analysis graph", () => {
       (await runAnalysisGraph("REQ-20240415-002 的进度如何")).intent,
     ).toBe("query");
     expect(classifyIntentByKeywords("你好，今天天气不错")).toBe("chat");
+    expect(classifyIntentByKeywords("查询一下 React 是什么")).toBe("chat");
+    expect(classifyIntentByKeywords("前端 React 是什么")).toBe("chat");
     expect(classifyIntentByKeywords("我需要一个用户登录功能")).toBe(
       "analyze",
     );

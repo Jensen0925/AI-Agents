@@ -24,6 +24,7 @@ import { UiFlowService, type UIFlowContext } from "../llm/ui-protocol/ui-flow.se
 import { UiResponseService } from "../llm/ui-protocol/ui-response.service";
 import { uiActionSchema } from "../llm/ui-protocol/ui-schemas";
 import type { AIUIResponse, UIAction } from "../llm/ui-protocol/ui-types";
+import { isUiRequirementFlowStart } from "../llm/conversation-route";
 import { MessageService } from "../message/message.service";
 import { ConversationService } from "./conversation.service";
 
@@ -47,9 +48,19 @@ interface UiActionBody {
   action: unknown;
 }
 
-function requireText(value: unknown, field: string): string {
+const MAX_CHAT_INPUT_LENGTH = 20_000;
+
+function requireText(
+  value: unknown,
+  field: string,
+  maxLength = MAX_CHAT_INPUT_LENGTH,
+): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new BadRequestException(`${field} must be a non-empty string`);
+  }
+
+  if (value.trim().length > maxLength) {
+    throw new BadRequestException(`${field} must not exceed ${maxLength} characters`);
   }
 
   return value.trim();
@@ -61,10 +72,6 @@ function currentUserId(request: AuthenticatedRequest): string {
   }
 
   return request.user.userId;
-}
-
-function isUiFlowStart(input: string): boolean {
-  return /新建?一个新需求|提一个新需求|新需求/.test(input);
 }
 
 function uiResponseText(response: AIUIResponse): string {
@@ -188,7 +195,7 @@ export class ConversationController {
     const history = await this.messageService.getHistory(conversationId, 80);
     await this.messageService.addMessage(conversationId, MessageRole.USER, input);
 
-    const response = isUiFlowStart(input)
+    const response = isUiRequirementFlowStart(input)
       ? this.uiFlowService.start(conversationId, input)
       : await this.uiResponseService.generateUIResponse(input, history);
 

@@ -49,6 +49,12 @@ const runAnalysisGraph = mock(async (_input: string, _context?: string) => ({
   ],
 }));
 
+const chatModelInvoke = mock(async () => new AIMessage("React 是一个前端 UI 库。"));
+
+mock.module("../src/llm/model.factory", () => ({
+  createChatModel: () => ({ invoke: chatModelInvoke }),
+}));
+
 mock.module("../src/llm/graph/analysis-graph.runner", () => ({
   runAnalysisGraph,
 }));
@@ -170,6 +176,10 @@ describe("AdvancedAnalysisService", () => {
 
   beforeEach(() => {
     runAnalysisGraph.mockClear();
+    chatModelInvoke.mockClear();
+    chatModelInvoke.mockImplementation(
+      async () => new AIMessage("React 是一个前端 UI 库。"),
+    );
     runAnalysisGraph.mockImplementation(async () => ({
       messages: [],
       intent: "analyze" as const,
@@ -397,6 +407,65 @@ describe("AdvancedAnalysisService", () => {
     expect(result.report).toBeNull();
     expect(result.summary).not.toContain("## 需求摘要");
     expect(addMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers general technical questions directly without retrieval or requirement analysis", async () => {
+    const addMessage = mock(async () => undefined);
+    const search = mock(async () => [
+      { content: "不相关的退换货政策", score: 0.9 },
+    ]);
+    const service = new AdvancedAnalysisService(
+      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      {
+        getHistoryAsLangChainMessages: mock(async () => []),
+        addMessage,
+      } as unknown as MessageService,
+      { search } as unknown as SearchService,
+    );
+
+    const result = await service.analyze(
+      "user-1",
+      "conversation-react",
+      "查询一下 React 是什么",
+    );
+
+    expect(result.intent).toBe("chat");
+    expect(result.chatResponse).toContain("React");
+    expect(result.retrievedDocuments).toEqual([]);
+    expect(search).not.toHaveBeenCalled();
+    expect(runAnalysisGraph).not.toHaveBeenCalled();
+    expect(chatModelInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("retrieves documents only for explicit knowledge-base questions", async () => {
+    chatModelInvoke.mockImplementation(
+      async () => new AIMessage("知识库显示：未拆封商品支持七天无理由退货。"),
+    );
+    const search = mock(async () => [
+      { content: "未拆封商品支持七天无理由退货。", score: 0.91 },
+    ]);
+    const service = new AdvancedAnalysisService(
+      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      {
+        getHistoryAsLangChainMessages: mock(async () => []),
+        addMessage: mock(async () => undefined),
+      } as unknown as MessageService,
+      { search } as unknown as SearchService,
+    );
+
+    const result = await service.analyze(
+      "user-1",
+      "conversation-kb",
+      "根据知识库查询退换货政策",
+    );
+
+    expect(result.intent).toBe("knowledge");
+    expect(result.queryResponse).toContain("知识库显示");
+    expect(result.retrievedDocuments).toEqual([
+      { content: "未拆封商品支持七天无理由退货。", score: 0.91 },
+    ]);
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(runAnalysisGraph).not.toHaveBeenCalled();
   });
 
   it("asks targeted questions for a brief login requirement", async () => {

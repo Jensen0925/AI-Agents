@@ -25,7 +25,13 @@ const { createReactAgent } = require('@langchain/langgraph/prebuilt') as {
 
 /** 本地基础工具：MCP 离线或工具故障时，Agent 仍能完成最小分析闭环。 */
 export const readRequirementTool = tool(
-  async ({ requirementId }) => JSON.stringify({ requirementId, source: 'local-fallback', status: 'draft' }),
+  async ({ requirementId }) =>
+    JSON.stringify({
+      requirementId,
+      available: false,
+      source: "local-fallback",
+      message: "需求主数据源尚未接入，不能返回真实需求状态。",
+    }),
   {
     name: 'read_requirement',
     description: '读取指定需求编号的本地基础信息，适用于已有需求查询。',

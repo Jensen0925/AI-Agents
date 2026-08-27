@@ -3,7 +3,14 @@ import {
   Body,
   Controller,
   Post,
+  Req,
+  UseGuards,
 } from "@nestjs/common";
+import {
+  type AuthenticatedRequest,
+  JwtAuthGuard,
+} from "../../auth/jwt-auth.guard";
+import { isUiRequirementFlowStart } from "../conversation-route";
 import { uiActionSchema } from "./ui-schemas";
 import { UiFlowService } from "./ui-flow.service";
 import { UiResponseService } from "./ui-response.service";
@@ -26,11 +33,23 @@ function requireText(value: unknown, field: string): string {
     throw new BadRequestException(`${field} must be a non-empty string`);
   }
 
+  if (value.trim().length > 20_000) {
+    throw new BadRequestException(`${field} must not exceed 20000 characters`);
+  }
+
   return value.trim();
+}
+
+function currentUserId(request: AuthenticatedRequest): string {
+  if (!request.user) {
+    throw new BadRequestException("Authenticated user is unavailable");
+  }
+  return request.user.userId;
 }
 
 /** UI 协议的统一 HTTP 入口，前端只需要记住 chat/action 两个端点。 */
 @Controller("api/ui-chat")
+@UseGuards(JwtAuthGuard)
 export class UiChatController {
   constructor(
     private readonly uiResponseService: UiResponseService,
@@ -39,14 +58,17 @@ export class UiChatController {
 
   /** 根据自然语言生成一个或多个可渲染 UI 组件。 */
   @Post("chat")
-  chat(@Body() rawBody: UiChatBody): Promise<AIUIResponse> {
+  chat(
+    @Req() request: AuthenticatedRequest,
+    @Body() rawBody: UiChatBody,
+  ): Promise<AIUIResponse> {
     const body = rawBody ?? {};
-    const sessionId = requireText(body.sessionId, "sessionId");
+    const sessionId = `${currentUserId(request)}:${requireText(body.sessionId, "sessionId")}`;
     const input = requireText(body.input, "input");
 
     // 新建需求是确定性的交互入口，先初始化 session context，再从 Stage 1 开始。
     // 其他自然语言仍交给 Structured Output 服务生成通用 UI 响应。
-    if (/新建?一个新需求|提一个新需求|新需求/.test(input)) {
+    if (isUiRequirementFlowStart(input)) {
       return Promise.resolve(this.uiFlowService.start(sessionId, input));
     }
 
@@ -59,9 +81,12 @@ export class UiChatController {
 
   /** 接收 selection/form/confirmation/button 回传，并推进 session 状态机。 */
   @Post("action")
-  action(@Body() rawBody: UiActionBody): AIUIResponse {
+  action(
+    @Req() request: AuthenticatedRequest,
+    @Body() rawBody: UiActionBody,
+  ): AIUIResponse {
     const body = rawBody ?? {};
-    const sessionId = requireText(body.sessionId, "sessionId");
+    const sessionId = `${currentUserId(request)}:${requireText(body.sessionId, "sessionId")}`;
     const parsed = uiActionSchema.safeParse(body.action);
 
     if (!parsed.success) {

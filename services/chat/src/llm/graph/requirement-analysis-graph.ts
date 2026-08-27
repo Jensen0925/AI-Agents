@@ -25,6 +25,7 @@ import {
 } from "../agents/sub-agents";
 import { createChatModel } from "../model.factory";
 import type { TokenUsageService } from "../cost/token-usage.service";
+import { classifyConversationRoute } from "../conversation-route";
 import { analysisTools } from "./analysis-tools";
 import {
   createAnalysisSupervisorSubGraph,
@@ -37,7 +38,7 @@ import {
 const DEFAULT_RETRIEVED_CONTEXT =
   "当前用户知识库没有检索到相关文档。";
 
-const CLASSIFIER_SYSTEM_PROMPT = `你是需求分析系统的意图分类器，只负责把用户输入分到 analyze、query、chat 三类之一。
+const CLASSIFIER_SYSTEM_PROMPT = `你是会话入口的意图分类器，只负责把用户输入分到 analyze、query、chat 三类之一。
 
 三类意图判断规则：
 1. analyze（需求分析）
@@ -46,20 +47,21 @@ const CLASSIFIER_SYSTEM_PROMPT = `你是需求分析系统的意图分类器，�
 2. query（需求查询）
    - 关键特征：用户查询已有需求的状态、进度、详情、历史结果或已经生成的分析报告。
    - 示例：“查询 REQ-20240315-001 的当前状态”“REQ-20240415-002 的进度如何”。
-3. chat（普通闲聊）
-   - 关键特征：问候、寒暄、与需求业务无关的轻量交流。
-   - 示例：“你好”“今天天气不错”“谢谢你的帮助”。
+3. chat（直接模型问答）
+   - 关键特征：问候、寒暄、概念解释、技术问答、编程问题和其他不涉及既有需求记录的通用问题。
+   - 示例：“你好”“React 是什么”“前端 React 怎么用”“解释一下 RAG”。
 
 边界情况处理策略：
-- “查询 XXX 的分析报告”“查看某需求的风险分析结果”是在读取已有结果，必须判为 query，而不是 analyze。
+- “查询 XXX 的分析报告”“查看某需求的风险分析结果”是在读取已有需求结果，必须判为 query，而不是 analyze。
+- “查询一下 React 是什么”虽然包含“查询”，但没有需求编号或既有需求记录语义，必须判为 chat。
 - 输入虽然包含需求编号，但明确提供了新的需求正文并要求立即分析时，可判为 analyze。
 - “看看某需求有没有什么问题”若主要指向已有需求编号，应判为 query；若给出完整新需求内容并要求评估，判为 analyze。
 
 优先级规则：
 1. 同时出现“查询/查看/状态/进度/报告”等读取意图和需求编号时，优先 query。
 2. 只有需求编号且语义不明确时，优先 query。
-3. 纯问候或纯闲聊优先 chat。
-4. 明确提供新需求正文并要求分析时使用 analyze；其他无法确定的业务输入默认 analyze。
+3. 通用知识、技术概念和编程问题优先 chat。
+4. 明确提供新需求正文并要求分析时使用 analyze；其他无法确定的输入默认 chat。
 
 必须返回符合 Schema 的 intent 和简短 reasoning，不要回答用户的问题。`;
 
@@ -125,7 +127,8 @@ export type AnalysisGraphStep =
   | "summaryStep"
   | "riskOnlyHandler"
   | "queryHandler"
-  | "chatHandler";
+  | "chatHandler"
+  | "knowledgeHandler";
 
 export type AnalysisSubgraphStep =
   | "analysisSupervisor"
@@ -641,39 +644,10 @@ export async function runAnalysisSubGraph(
  * 带编号的读取请求优先 query；纯闲聊优先 chat；其余业务请求默认 analyze。
  */
 export function classifyIntentByKeywords(input: string): ClassifierIntent {
-  const requirementIdPattern = /\bREQ-\d{8}-\d{3,}\b/i;
-  const hasRequirementId = requirementIdPattern.test(input);
-  const hasQueryKeyword =
-    /(查询|查看|看看|状态|进度|详情|历史|报告|结果|有没有什么问题)/i.test(
-      input,
-    );
-  const hasExplicitAnalysis = /(分析需求|需求分析|评估需求|拆解需求)/i.test(
-    input,
-  );
-  const hasNewRequirementBody =
-    /(?:开发|实现|新增|建设|创建).*(?:系统|功能|能力|模块)|支持.+(?:功能|题型|流程|场景)/i.test(
-      input,
-    );
-
-  // 明确附带新需求正文的分析命令，是“分析编号对应的新需求”而不是查询旧结果。
-  if (hasExplicitAnalysis && hasNewRequirementBody) {
-    return "analyze";
-  }
-
-  if (hasRequirementId || hasQueryKeyword) {
-    return "query";
-  }
-
-  const hasBusinessKeyword =
-    /(需求|功能|系统|用户|验收|风险|约束|流程|开发|实现)/i.test(input);
-  const hasChatKeyword =
-    /^(你好|您好|嗨|hi|hello|谢谢|多谢|再见)|天气不错|聊聊天/i.test(input);
-
-  if (hasChatKeyword && !hasBusinessKeyword) {
-    return "chat";
-  }
-
-  return "analyze";
+  const route = classifyConversationRoute(input);
+  if (route === "requirement_analysis") return "analyze";
+  if (route === "requirement_query") return "query";
+  return "chat";
 }
 
 type TriageResult = z.infer<typeof triageSchema>;
@@ -1112,22 +1086,19 @@ function createSummaryStepNode(model: ChatModel) {
   };
 }
 
-/** 已有需求查询节点，同时写入 summary 以兼容旧调用方。 */
-function createQueryHandlerNode(model: ChatModel) {
+/**
+ * 已有需求查询节点。
+ *
+ * 当前主应用没有用户级需求主数据表，不能把模型生成内容当作真实状态返回。
+ */
+function createQueryHandlerNode() {
   return async (
     state: RequirementAnalysisStateValue,
   ): Promise<RequirementAnalysisStateUpdate> => {
-    let content: string;
-    try {
-      const response = await model.invoke([
-        new SystemMessage("你是需求查询助手"),
-        new HumanMessage(getInput(state)),
-      ]);
-      content = getMessageText(response).trim();
-    } catch {
-      // 查询模型不可用时仍返回可展示的降级结果，避免整个会话请求变成 500。
-      content = "暂时无法查询需求详情，请稍后重试。";
-    }
+    const requirementId = getInput(state).match(/\bREQ-[A-Z0-9-]+\b/iu)?.[0];
+    const content = requirementId
+      ? `已识别需求编号 ${requirementId}，但当前服务尚未接入用户级需求主数据源，因此不能返回真实状态、进度或详情。`
+      : "当前服务尚未接入用户级需求主数据源。请提供需求编号，并在接入需求系统后查询真实状态或详情。";
 
     return { queryResponse: content, summary: content };
   };
@@ -1205,7 +1176,7 @@ export function createAnalysisGraph(
     .addNode("analysisStep", analysisSupervisorSubGraph)
     .addNode("riskStep", riskNode)
     .addNode("summaryStep", createSummaryStepNode(model))
-    .addNode("queryHandler", createQueryHandlerNode(model))
+    .addNode("queryHandler", createQueryHandlerNode())
     .addNode("chatHandler", createChatHandlerNode(model))
     .addEdge(START, "classifier")
     .addConditionalEdges("classifier", routeByIntent, [
