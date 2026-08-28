@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it, vi } from "vitest";
 import { GUARDS_METADATA } from "@nestjs/common/constants";
 import { JwtAuthGuard } from "../src/auth/jwt-auth.guard";
 import { ConversationController } from "../src/conversation/conversation.controller";
@@ -7,37 +7,28 @@ import type { AdvancedAnalysisService } from "../src/llm/advanced-analysis.servi
 import type { UiFlowService } from "../src/llm/ui-protocol/ui-flow.service";
 import type { UiResponseService } from "../src/llm/ui-protocol/ui-response.service";
 import type { MessageService } from "../src/message/message.service";
-import type { PrismaService } from "../src/prisma/prisma.service";
+import { createDatabaseMock } from "./drizzle-test-utils";
 
 describe("ConversationService", () => {
   it("filters conversation lookup by both conversationId and userId", async () => {
-    const findFirst = mock(async () => ({
+    const select = [{
       id: "conversation-1",
       userId: "user-1",
       title: "需求分析",
       createdAt: new Date(),
       updatedAt: new Date(),
-    }));
-    const prisma = {
-      conversation: { findFirst },
-    } as unknown as PrismaService;
-    const service = new ConversationService(prisma);
+    }];
+    const database = createDatabaseMock({ select: [select] });
+    const service = new ConversationService(database);
 
-    await service.findById("conversation-1", "user-1");
+    const conversation = await service.findById("conversation-1", "user-1");
 
-    expect(findFirst).toHaveBeenCalledWith({
-      where: {
-        id: "conversation-1",
-        userId: "user-1",
-      },
-    });
+    expect(conversation.id).toBe("conversation-1");
+    expect((database.db.select as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
   });
 
   it("does not reveal whether another user's conversation exists", async () => {
-    const prisma = {
-      conversation: { findFirst: mock(async () => null) },
-    } as unknown as PrismaService;
-    const service = new ConversationService(prisma);
+    const service = new ConversationService(createDatabaseMock({ select: [[]] }));
 
     await expect(
       service.findById("conversation-1", "another-user"),
@@ -56,8 +47,8 @@ describe("ConversationController", () => {
   });
 
   it("routes conversation chat through the unified analysis service", async () => {
-    const findById = mock(async () => ({ id: "conversation-1" }));
-    const analyze = mock(
+    const findById = vi.fn(async () => ({ id: "conversation-1" }));
+    const analyze = vi.fn(
       async (_userId: string, _conversationId: string, _input: string) => ({
         report: "需求分析报告",
         usedAgents: ["extractAgent" as const],

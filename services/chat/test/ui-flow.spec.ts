@@ -1,5 +1,5 @@
-import { describe, expect, it, mock } from "bun:test";
-import { MessageRole } from "@prisma/client";
+import { describe, expect, it, vi } from "vitest";
+import { MessageRole } from "../src/database/schema";
 import { ConversationController } from "../src/conversation/conversation.controller";
 import type { ConversationService } from "../src/conversation/conversation.service";
 import type { AdvancedAnalysisService } from "../src/llm/advanced-analysis.service";
@@ -98,10 +98,10 @@ describe("UiFlowService", () => {
 
 describe("ConversationController UI Chat", () => {
   it("将 UI 组件和流程上下文随会话消息持久化", async () => {
-    const findById = mock(async () => ({ id: "conversation-1" }));
-    const getHistory = mock(async () => []);
-    const addMessage = mock(async () => ({ id: "message-1" }));
-    const start = mock(() => ({
+    const findById = vi.fn(async () => ({ id: "conversation-1" }));
+    const getHistory = vi.fn(async () => []);
+    const addMessage = vi.fn(async () => ({ id: "message-1" }));
+    const start = vi.fn(() => ({
       message: "请选择需求类型。",
       components: [
         {
@@ -111,7 +111,7 @@ describe("ConversationController UI Chat", () => {
         },
       ],
     }));
-    const getContext = mock(
+    const getContext = vi.fn(
       (): UIFlowContext => ({
         sessionStage: "select_type",
         collectedData: { initialInput: FLOW_INPUT },
@@ -124,7 +124,7 @@ describe("ConversationController UI Chat", () => {
       {} as UiResponseService,
       {
         start,
-        hasSession: mock(() => true),
+        hasSession: vi.fn(() => true),
         getContext,
       } as unknown as UiFlowService,
     );
@@ -158,8 +158,8 @@ describe("ConversationController UI Chat", () => {
   });
 
   it("执行 UI action 前会从上一条助手消息恢复流程状态", async () => {
-    const findById = mock(async () => ({ id: "conversation-1" }));
-    const getHistory = mock(async () => [
+    const findById = vi.fn(async () => ({ id: "conversation-1" }));
+    const getHistory = vi.fn(async () => [
       {
         role: MessageRole.ASSISTANT,
         metadata: {
@@ -172,9 +172,9 @@ describe("ConversationController UI Chat", () => {
         },
       },
     ]);
-    const addMessage = mock(async () => ({ id: "message-2" }));
-    const restoreContext = mock(() => true);
-    const handleAction = mock(() => ({
+    const addMessage = vi.fn(async () => ({ id: "message-2" }));
+    const restoreContext = vi.fn(() => true);
+    const handleAction = vi.fn(() => ({
       message: "请确认提交。",
       components: [
         {
@@ -192,8 +192,8 @@ describe("ConversationController UI Chat", () => {
       {
         restoreContext,
         handleAction,
-        hasSession: mock(() => true),
-        getContext: mock(
+        hasSession: vi.fn(() => true),
+        getContext: vi.fn(
           (): UIFlowContext => ({
             sessionStage: "confirm",
             collectedData: { requirementType: "functional" },

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import {
   cosineSimilarity,
   dot,
@@ -126,9 +126,9 @@ describe("向量数据库", () => {
   );
   const queryVector = normalize([3, 7, 2, 5]);
 
-  function createKnnPrismaMock() {
+  function createKnnDatabaseMock() {
     return {
-      async $queryRaw<T>(
+      async query<T>(
         strings: TemplateStringsArray,
         ...values: unknown[]
       ): Promise<T> {
@@ -169,7 +169,7 @@ describe("向量数据库", () => {
       .sort((a, b) => b.score - a.score)
       .slice(0, topK);
 
-    const results = await similaritySearch(createKnnPrismaMock(), queryVector, {
+    const results = await similaritySearch(createKnnDatabaseMock(), queryVector, {
       topK,
     });
 
@@ -180,7 +180,7 @@ describe("向量数据库", () => {
 
   it("pgvector 余弦 score 始终等于 1 - 距离", async () => {
     const results = await similaritySearch(
-      createKnnPrismaMock(),
+      createKnnDatabaseMock(),
       queryVector,
       { topK: 3 },
     );
@@ -194,7 +194,7 @@ describe("向量数据库", () => {
 
   it("查询向量维度与库中向量不一致时抛出 RangeError", async () => {
     await expect(
-      similaritySearch(createKnnPrismaMock(), [1, 2, 3]),
+      similaritySearch(createKnnDatabaseMock(), [1, 2, 3]),
     ).rejects.toThrow(new RangeError("向量维度不匹配"));
   });
 });

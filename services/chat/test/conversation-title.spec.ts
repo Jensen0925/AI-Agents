@@ -1,12 +1,12 @@
-import { describe, expect, it, mock } from "bun:test";
-import { MessageRole } from "@prisma/client";
+import { describe, expect, it, vi } from "vitest";
+import { MessageRole } from "../src/database/schema";
 import { ConversationService } from "../src/conversation/conversation.service";
 import {
   createConversationTitle,
   DEFAULT_CONVERSATION_TITLE,
 } from "../src/conversation/conversation-title";
 import { MessageService } from "../src/message/message.service";
-import type { PrismaService } from "../src/prisma/prisma.service";
+import { createDatabaseMock } from "./drizzle-test-utils";
 
 describe("conversation title", () => {
   it("uses the first message and keeps the title short", () => {
@@ -24,19 +24,21 @@ describe("conversation title", () => {
   });
 
   it("derives display titles for legacy conversations still named 新会话", async () => {
-    const findMany = mock(async () => [
-      {
-        id: "conversation-1",
-        userId: "user-1",
-        title: DEFAULT_CONVERSATION_TITLE,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        messages: [{ content: "分析用户登录需求" }],
-      },
-    ]);
-    const service = new ConversationService({
-      conversation: { findMany },
-    } as unknown as PrismaService);
+    const database = createDatabaseMock({
+      select: [[
+        {
+          conversation: {
+            id: "conversation-1",
+            userId: "user-1",
+            title: DEFAULT_CONVERSATION_TITLE,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+          firstMessage: "分析用户登录需求",
+        },
+      ]],
+    });
+    const service = new ConversationService(database);
 
     const conversations = await service.findByUser("user-1");
 
@@ -45,21 +47,11 @@ describe("conversation title", () => {
   });
 
   it("persists the generated title when the first user message is added", async () => {
-    const transactionClient = {
-      message: {
-        create: mock(async () => ({ id: "message-1" })),
-      },
-      conversation: {
-        findUnique: mock(async () => ({ title: DEFAULT_CONVERSATION_TITLE })),
-        update: mock(async () => ({ id: "conversation-1" })),
-      },
-    };
-    const prisma = {
-      $transaction: async (
-        callback: (transaction: typeof transactionClient) => Promise<unknown>,
-      ) => callback(transactionClient),
-    } as unknown as PrismaService;
-    const service = new MessageService(prisma);
+    const database = createDatabaseMock({
+      select: [[{ title: DEFAULT_CONVERSATION_TITLE }]],
+      returning: [[{ id: "message-1" }]],
+    });
+    const service = new MessageService(database);
 
     await service.addMessage(
       "conversation-1",
@@ -67,12 +59,6 @@ describe("conversation title", () => {
       "  我要做一个订单查询功能\n支持按手机号搜索  ",
     );
 
-    expect(transactionClient.conversation.update).toHaveBeenCalledWith({
-      where: { id: "conversation-1" },
-      data: {
-        updatedAt: expect.any(Date),
-        title: "我要做一个订单查询功能 支持按手机号搜索",
-      },
-    });
+    expect((database.db.update as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from "vitest";
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { ChatOpenAI } from '@langchain/openai';
 import { z } from 'zod';

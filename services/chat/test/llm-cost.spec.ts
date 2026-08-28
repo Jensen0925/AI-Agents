@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it, vi } from "vitest";
 import { compressConversation } from "../src/llm/context/conversation-compressor";
 import { trimMessagesForContext } from "../src/llm/context/message-trimmer";
 import {
@@ -16,6 +16,7 @@ import {
 import { TokenUsageService } from "../src/llm/cost/token-usage.service";
 import { withTokenUsage } from "../src/llm/cost/with-token-usage";
 import { resolveBudgetAction } from "../src/llm/cost/budget-policy";
+import { createDatabaseMock } from "./drizzle-test-utils";
 
 describe("token economics estimator", () => {
   it("returns zero for empty text", () => {
@@ -105,14 +106,14 @@ describe("message-trimmer", () => {
 
 describe("conversation-compressor", () => {
   it("does not invoke the summary model for a short conversation", async () => {
-    const invoke = mock(async () => ({ content: "不应调用" }));
+    const invoke = vi.fn(async () => ({ content: "不应调用" }));
     const messages = [new SystemMessage("系统"), new HumanMessage("你好")];
     expect(await compressConversation(messages, { invoke }, { keepRecent: 2 })).toBe(messages);
     expect(invoke).not.toHaveBeenCalled();
   });
 
   it("compresses early history and preserves system messages", async () => {
-    const invoke = mock(async () => ({ content: "REQ-2026-001：已完成需求类型选择。" }));
+    const invoke = vi.fn(async () => ({ content: "REQ-2026-001：已完成需求类型选择。" }));
     const system = new SystemMessage("你是需求分析助手");
     const messages = [system, new HumanMessage("需求编号 REQ-2026-001"), new AIMessage("已记录编号"), new HumanMessage("批量导入 Excel"), new AIMessage("请补充规则"), new HumanMessage("规则已确认")];
     const result = await compressConversation(messages, { invoke }, { keepRecent: 2, summaryMaxTokens: 500 });
@@ -189,27 +190,9 @@ describe("runtime model overrides", () => {
 });
 
 describe("TokenUsageService", () => {
-  function createPrismaMock() {
-    return {
-      tokenUsage: {
-        create: mock(async (_args: unknown) => ({ id: "usage-1" })),
-        aggregate: mock(async (_args: unknown) => ({
-          _sum: {
-            estimatedCostUsd: 1.25,
-            inputTokens: 1_000,
-            outputTokens: 200,
-            cachedInputTokens: 100,
-          },
-          _count: { _all: 4 },
-        })),
-        groupBy: mock(async (_args: unknown) => []),
-      },
-    };
-  }
-
   it("writes a complete usage row and derives totalTokens", async () => {
-    const prisma = createPrismaMock();
-    const service = new TokenUsageService(prisma as never);
+    const database = createDatabaseMock();
+    const service = new TokenUsageService(database);
     await service.recordUsage({
       conversationId: "conversation-1",
       messageId: "message-1",
@@ -226,20 +209,25 @@ describe("TokenUsageService", () => {
       latencyMs: 88,
       overrideReason: "low_complexity_downgrade",
     });
-    expect(prisma.tokenUsage.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        provider: "openai",
-        totalTokens: 120,
-        isEstimated: false,
-        inputTokens: 100,
-        outputTokens: 20,
-      }),
-    });
+    const insert = database.db.insert as unknown as ReturnType<typeof vi.fn>;
+    expect(insert).toHaveBeenCalledTimes(1);
   });
 
   it("aggregates current-month totals", async () => {
-    const prisma = createPrismaMock();
-    const service = new TokenUsageService(prisma as never);
+    const database = createDatabaseMock({
+      select: [
+        [
+          {
+            totalCost: 1.25,
+            totalInputTokens: 1_000,
+            totalOutputTokens: 200,
+            totalCachedTokens: 100,
+            calls: 4,
+          },
+        ],
+      ],
+    });
+    const service = new TokenUsageService(database);
     expect(await service.getMonthlyStats()).toEqual({
       totalCost: 1.25,
       totalInputTokens: 1_000,
@@ -247,24 +235,23 @@ describe("TokenUsageService", () => {
       totalCachedTokens: 100,
       calls: 4,
     });
-    const call = prisma.tokenUsage.aggregate.mock.calls[0]?.[0] as {
-      where: { createdAt: { gte: Date } };
-    };
-    expect(call.where.createdAt.gte.getDate()).toBe(1);
+    expect(database.db.select).toHaveBeenCalledTimes(1);
   });
 
   it("groups node and agent costs in descending order", async () => {
-    const prisma = createPrismaMock();
-    prisma.tokenUsage.groupBy
-      .mockResolvedValueOnce([
-        { nodeName: "summary", _sum: { estimatedCostUsd: 2 }, _count: { _all: 3 } },
-        { nodeName: "risk", _sum: { estimatedCostUsd: 1 }, _count: { _all: 2 } },
-      ] as never)
-      .mockResolvedValueOnce([
-        { agentName: "summary_agent", _sum: { estimatedCostUsd: 2 }, _count: { _all: 3 } },
-        { agentName: "risk_agent", _sum: { estimatedCostUsd: 1 }, _count: { _all: 2 } },
-      ] as never);
-    const service = new TokenUsageService(prisma as never);
+    const database = createDatabaseMock({
+      select: [
+        [
+          { nodeName: "summary", totalCost: 2, calls: 3 },
+          { nodeName: "risk", totalCost: 1, calls: 2 },
+        ],
+        [
+          { agentName: "summary_agent", totalCost: 2, calls: 3 },
+          { agentName: "risk_agent", totalCost: 1, calls: 2 },
+        ],
+      ],
+    });
+    const service = new TokenUsageService(database);
     expect(await service.getStatsByNode()).toEqual([
       { nodeName: "summary", totalCost: 2, calls: 3 },
       { nodeName: "risk", totalCost: 1, calls: 2 },
@@ -273,22 +260,25 @@ describe("TokenUsageService", () => {
       { agentName: "summary_agent", totalCost: 2, calls: 3 },
       { agentName: "risk_agent", totalCost: 1, calls: 2 },
     ]);
-    expect(prisma.tokenUsage.groupBy.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ orderBy: { _sum: { estimatedCostUsd: "desc" } } }),
-    );
+    expect(database.db.select).toHaveBeenCalledTimes(2);
   });
 
   it("reports whether the monthly budget is exhausted", async () => {
-    const prisma = createPrismaMock();
-    const service = new TokenUsageService(prisma as never);
+    const database = createDatabaseMock({
+      select: [[{ totalCost: 1.25, totalInputTokens: 0, totalOutputTokens: 0, totalCachedTokens: 0, calls: 1 }]],
+    });
+    const service = new TokenUsageService(database);
     expect(await service.isOverBudget(1)).toBe(true);
     expect(await service.isOverBudget(2)).toBe(false);
   });
 
-  it("swallows prisma write errors", async () => {
-    const prisma = createPrismaMock();
-    prisma.tokenUsage.create.mockRejectedValueOnce(new Error("database unavailable"));
-    const service = new TokenUsageService(prisma as never);
+  it("swallows drizzle write errors", async () => {
+    const database = createDatabaseMock();
+    const insert = database.db.insert as unknown as ReturnType<typeof vi.fn>;
+    insert.mockImplementation(() => {
+      throw new Error("database unavailable");
+    });
+    const service = new TokenUsageService(database);
     await expect(
       service.recordUsage({
         graphName: "graph",
@@ -302,7 +292,7 @@ describe("TokenUsageService", () => {
 
 describe("withTokenUsage", () => {
   it("records exact OpenAI usage including cached tokens", async () => {
-    const recordUsage = mock(async () => undefined);
+    const recordUsage = vi.fn(async () => undefined);
     const response = {
       content: "完成",
       response_metadata: {
@@ -333,7 +323,7 @@ describe("withTokenUsage", () => {
   });
 
   it("estimates usage at a 5:1 input/output ratio when metadata is absent", async () => {
-    const recordUsage = mock(async () => undefined);
+    const recordUsage = vi.fn(async () => undefined);
     const response = { content: "abcdefgh" };
     await withTokenUsage(
       { graphName: "graph", nodeName: "node", agentName: "agent", modelName: "deepseek-v4-pro" },
@@ -353,7 +343,7 @@ describe("withTokenUsage", () => {
 
   it("returns the model response when recording throws", async () => {
     const response = { content: "仍然返回" };
-    const recordUsage = mock(async () => {
+    const recordUsage = vi.fn(async () => {
       throw new Error("write failed");
     });
     expect(

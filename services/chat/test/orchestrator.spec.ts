@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
-import { MessageRole } from "@prisma/client";
+import { MessageRole } from "../src/database/schema";
 import type { SearchService } from "../src/document/search.service";
 import type { OrchestratorService as OrchestratorServiceType } from "../src/llm/agents/orchestrator.service";
 import type { MessageService } from "../src/message/message.service";
 
-const extractInvoke = mock(async () =>
+const extractInvoke = vi.fn(async () =>
   JSON.stringify({
     title: "会话记忆系统",
     actors: ["需求分析师"],
@@ -16,14 +16,14 @@ const extractInvoke = mock(async () =>
     unknowns: [],
   }),
 );
-const clarifyInvoke = mock(async () =>
+const clarifyInvoke = vi.fn(async () =>
   JSON.stringify({ needsClarification: false, questions: [] }),
 );
-const analysisInvoke = mock(async () => "需求分析结果");
-const riskInvoke = mock(async () => "风险评估结果");
-const summaryInvoke = mock(async () => "最终需求分析报告");
+const analysisInvoke = vi.fn(async () => "需求分析结果");
+const riskInvoke = vi.fn(async () => "风险评估结果");
+const summaryInvoke = vi.fn(async () => "最终需求分析报告");
 
-mock.module("../src/llm/agents/sub-agents", () => ({
+vi.mock("../src/llm/agents/sub-agents", () => ({
   extractAgent: { invoke: extractInvoke },
   clarifyAgent: { invoke: clarifyInvoke },
   analysisAgent: { invoke: analysisInvoke },
@@ -31,7 +31,7 @@ mock.module("../src/llm/agents/sub-agents", () => ({
   summaryAgent: { invoke: summaryInvoke },
 }));
 
-const runAnalysisGraph = mock(async (_input: string, _context?: string) => ({
+const runAnalysisGraph = vi.fn(async (_input: string, _context?: string) => ({
   messages: [],
   intent: "analyze" as const,
   extracted: "需求字段",
@@ -49,20 +49,20 @@ const runAnalysisGraph = mock(async (_input: string, _context?: string) => ({
   ],
 }));
 
-const chatModelInvoke = mock(async () => new AIMessage("React 是一个前端 UI 库。"));
+const chatModelInvoke = vi.fn(async () => new AIMessage("React 是一个前端 UI 库。"));
 
-mock.module("../src/llm/model.factory", () => ({
+vi.mock("../src/llm/model.factory", () => ({
   createChatModel: () => ({ invoke: chatModelInvoke }),
 }));
 
-mock.module("../src/llm/graph/analysis-graph.runner", () => ({
+vi.mock("../src/llm/graph/analysis-graph.runner", () => ({
   runAnalysisGraph,
 }));
 
-const { OrchestratorService } = require(
+const { OrchestratorService } = await import(
   "../src/llm/agents/orchestrator.service"
 ) as typeof import("../src/llm/agents/orchestrator.service");
-const { AdvancedAnalysisService } = require(
+const { AdvancedAnalysisService } = await import(
   "../src/llm/advanced-analysis.service"
 ) as typeof import("../src/llm/advanced-analysis.service");
 
@@ -200,14 +200,14 @@ describe("AdvancedAnalysisService", () => {
   });
 
   it("combines DB history and retrieved context, then persists the conclusion", async () => {
-    const orchestrate = mock(
+    const orchestrate = vi.fn(
       async (_input: string, _retrievedContext: string) => completedResult,
     );
-    const getHistoryAsLangChainMessages = mock(async () => [
+    const getHistoryAsLangChainMessages = vi.fn(async () => [
       new HumanMessage("需求单号是 REQ-2026-001"),
       new AIMessage("已记录需求单号"),
     ]);
-    const addMessage = mock(
+    const addMessage = vi.fn(
       async (
         _conversationId: string,
         _role: MessageRole,
@@ -215,7 +215,7 @@ describe("AdvancedAnalysisService", () => {
         _metadata?: unknown,
       ) => undefined,
     );
-    const search = mock(async () => [
+    const search = vi.fn(async () => [
       { content: "需求必须支持上下文裁剪", score: 0.82 },
     ]);
     const service = new AdvancedAnalysisService(
@@ -269,15 +269,15 @@ describe("AdvancedAnalysisService", () => {
   });
 
   it("archives a completed analysis report without making artifact failure part of chat success", async () => {
-    const addMessage = mock(async () => undefined);
-    const upsertGeneratedReport = mock(async () => ({ id: "artifact-1" }));
+    const addMessage = vi.fn(async () => undefined);
+    const upsertGeneratedReport = vi.fn(async () => ({ id: "artifact-1" }));
     const service = new AdvancedAnalysisService(
-      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      { orchestrate: vi.fn(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
-        getHistoryAsLangChainMessages: mock(async () => []),
+        getHistoryAsLangChainMessages: vi.fn(async () => []),
         addMessage,
       } as unknown as MessageService,
-      { search: mock(async () => []) } as unknown as SearchService,
+      { search: vi.fn(async () => []) } as unknown as SearchService,
       { upsertGeneratedReport } as never,
     );
 
@@ -300,15 +300,15 @@ describe("AdvancedAnalysisService", () => {
     runAnalysisGraph.mockImplementation(async () => {
       throw new Error("graph unavailable");
     });
-    const orchestrate = mock(async () => ({
+    const orchestrate = vi.fn(async () => ({
       ...completedResult,
       status: "clarification_required" as const,
       clarificationQuestions: ["请明确系统支持的最大上下文长度"],
       usedAgents: ["extractAgent" as const, "clarifyAgent" as const],
       report: null,
     }));
-    const getHistoryAsLangChainMessages = mock(async () => []);
-    const addMessage = mock(
+    const getHistoryAsLangChainMessages = vi.fn(async () => []);
+    const addMessage = vi.fn(
       async (
         _conversationId: string,
         _role: MessageRole,
@@ -316,7 +316,7 @@ describe("AdvancedAnalysisService", () => {
         _metadata?: unknown,
       ) => undefined,
     );
-    const search = mock(async () => []);
+    const search = vi.fn(async () => []);
     const service = new AdvancedAnalysisService(
       { orchestrate } as unknown as OrchestratorServiceType,
       {
@@ -344,14 +344,14 @@ describe("AdvancedAnalysisService", () => {
     runAnalysisGraph.mockImplementation(async () => {
       throw new Error("graph unavailable");
     });
-    const orchestrate = mock(async () => ({
+    const orchestrate = vi.fn(async () => ({
       ...completedResult,
       status: "failed" as const,
       fallback: "manual_review" as const,
       usedAgents: ["extractAgent" as const],
       report: null,
     }));
-    const addMessage = mock(
+    const addMessage = vi.fn(
       async (
         _conversationId: string,
         _role: MessageRole,
@@ -362,10 +362,10 @@ describe("AdvancedAnalysisService", () => {
     const service = new AdvancedAnalysisService(
       { orchestrate } as unknown as OrchestratorServiceType,
       {
-        getHistoryAsLangChainMessages: mock(async () => []),
+        getHistoryAsLangChainMessages: vi.fn(async () => []),
         addMessage,
       } as unknown as MessageService,
-      { search: mock(async () => []) } as unknown as SearchService,
+      { search: vi.fn(async () => []) } as unknown as SearchService,
     );
 
     const result = await service.analyze(
@@ -384,12 +384,12 @@ describe("AdvancedAnalysisService", () => {
 
   it("answers casual chat without invoking retrieval or the analysis graph", async () => {
     const runMock = runAnalysisGraph;
-    const addMessage = mock(async () => undefined);
-    const search = mock(async () => []);
+    const addMessage = vi.fn(async () => undefined);
+    const search = vi.fn(async () => []);
     const service = new AdvancedAnalysisService(
-      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      { orchestrate: vi.fn(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
-        getHistoryAsLangChainMessages: mock(async () => []),
+        getHistoryAsLangChainMessages: vi.fn(async () => []),
         addMessage,
       } as unknown as MessageService,
       { search } as unknown as SearchService,
@@ -410,14 +410,14 @@ describe("AdvancedAnalysisService", () => {
   });
 
   it("answers general technical questions directly without retrieval or requirement analysis", async () => {
-    const addMessage = mock(async () => undefined);
-    const search = mock(async () => [
+    const addMessage = vi.fn(async () => undefined);
+    const search = vi.fn(async () => [
       { content: "不相关的退换货政策", score: 0.9 },
     ]);
     const service = new AdvancedAnalysisService(
-      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      { orchestrate: vi.fn(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
-        getHistoryAsLangChainMessages: mock(async () => []),
+        getHistoryAsLangChainMessages: vi.fn(async () => []),
         addMessage,
       } as unknown as MessageService,
       { search } as unknown as SearchService,
@@ -441,14 +441,14 @@ describe("AdvancedAnalysisService", () => {
     chatModelInvoke.mockImplementation(
       async () => new AIMessage("知识库显示：未拆封商品支持七天无理由退货。"),
     );
-    const search = mock(async () => [
+    const search = vi.fn(async () => [
       { content: "未拆封商品支持七天无理由退货。", score: 0.91 },
     ]);
     const service = new AdvancedAnalysisService(
-      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      { orchestrate: vi.fn(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
-        getHistoryAsLangChainMessages: mock(async () => []),
-        addMessage: mock(async () => undefined),
+        getHistoryAsLangChainMessages: vi.fn(async () => []),
+        addMessage: vi.fn(async () => undefined),
       } as unknown as MessageService,
       { search } as unknown as SearchService,
     );
@@ -470,12 +470,12 @@ describe("AdvancedAnalysisService", () => {
 
   it("asks targeted questions for a brief login requirement", async () => {
     const runMock = runAnalysisGraph;
-    const addMessage = mock(async () => undefined);
-    const search = mock(async () => []);
+    const addMessage = vi.fn(async () => undefined);
+    const search = vi.fn(async () => []);
     const service = new AdvancedAnalysisService(
-      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      { orchestrate: vi.fn(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
-        getHistoryAsLangChainMessages: mock(async () => []),
+        getHistoryAsLangChainMessages: vi.fn(async () => []),
         addMessage,
       } as unknown as MessageService,
       { search } as unknown as SearchService,
@@ -498,7 +498,7 @@ describe("AdvancedAnalysisService", () => {
 
   it("advances login clarification from answers already stored in the same conversation", async () => {
     const persisted: Array<HumanMessage | AIMessage> = [];
-    const addMessage = mock(
+    const addMessage = vi.fn(
       async (
         _conversationId: string,
         role: MessageRole,
@@ -512,12 +512,12 @@ describe("AdvancedAnalysisService", () => {
       },
     );
     const service = new AdvancedAnalysisService(
-      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      { orchestrate: vi.fn(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
-        getHistoryAsLangChainMessages: mock(async () => [...persisted]),
+        getHistoryAsLangChainMessages: vi.fn(async () => [...persisted]),
         addMessage,
       } as unknown as MessageService,
-      { search: mock(async () => []) } as unknown as SearchService,
+      { search: vi.fn(async () => []) } as unknown as SearchService,
     );
 
     const first = await service.analyze(
@@ -554,7 +554,7 @@ describe("AdvancedAnalysisService", () => {
 
   it("keeps a complete login destination answer on the clarification path", async () => {
     const persisted: Array<HumanMessage | AIMessage> = [];
-    const addMessage = mock(
+    const addMessage = vi.fn(
       async (
         _conversationId: string,
         role: MessageRole,
@@ -567,11 +567,11 @@ describe("AdvancedAnalysisService", () => {
         );
       },
     );
-    const search = mock(async () => []);
+    const search = vi.fn(async () => []);
     const service = new AdvancedAnalysisService(
-      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      { orchestrate: vi.fn(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
-        getHistoryAsLangChainMessages: mock(async () => [...persisted]),
+        getHistoryAsLangChainMessages: vi.fn(async () => [...persisted]),
         addMessage,
       } as unknown as MessageService,
       { search } as unknown as SearchService,
@@ -605,7 +605,7 @@ describe("AdvancedAnalysisService", () => {
 
   it("explains the missing order data source and keeps query context on follow-up", async () => {
     const persisted: Array<HumanMessage | AIMessage> = [];
-    const addMessage = mock(
+    const addMessage = vi.fn(
       async (
         _conversationId: string,
         role: MessageRole,
@@ -618,11 +618,11 @@ describe("AdvancedAnalysisService", () => {
         );
       },
     );
-    const search = mock(async () => []);
+    const search = vi.fn(async () => []);
     const service = new AdvancedAnalysisService(
-      { orchestrate: mock(async () => completedResult) } as unknown as OrchestratorServiceType,
+      { orchestrate: vi.fn(async () => completedResult) } as unknown as OrchestratorServiceType,
       {
-        getHistoryAsLangChainMessages: mock(async () => [...persisted]),
+        getHistoryAsLangChainMessages: vi.fn(async () => [...persisted]),
         addMessage,
       } as unknown as MessageService,
       { search } as unknown as SearchService,

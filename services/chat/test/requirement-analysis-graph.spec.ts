@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
-import { beforeEach, describe, expect, it, mock } from "bun:test";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const RETRIEVED_CONTEXT = "当前用户知识库没有检索到相关文档。";
 const EXTRACTED = JSON.stringify({
@@ -132,32 +132,32 @@ const fakeModel = {
   },
 };
 
-mock.module("../src/llm/model.factory", () => ({
+vi.mock("../src/llm/model.factory", () => ({
   createChatModel: () => fakeModel,
 }));
 
-const extractInvoke = mock(async (_input: AgentInput) => {
+const extractInvoke = vi.fn(async (_input: AgentInput) => {
   invocationOrder.push("extract");
   return EXTRACTED;
 });
-const clarifyInvoke = mock(async (_input: AgentInput) => {
+const clarifyInvoke = vi.fn(async (_input: AgentInput) => {
   invocationOrder.push("clarify");
   return CLARIFIED;
 });
-const analysisInvoke = mock(async (_input: AgentInput) => {
+const analysisInvoke = vi.fn(async (_input: AgentInput) => {
   invocationOrder.push("analysis");
   return "需求分析结果";
 });
-const riskInvoke = mock(async (_input: AgentInput) => {
+const riskInvoke = vi.fn(async (_input: AgentInput) => {
   invocationOrder.push("risk");
   return "风险评估结果";
 });
-const summaryInvoke = mock(async (_input: AgentInput) => {
+const summaryInvoke = vi.fn(async (_input: AgentInput) => {
   invocationOrder.push("summary");
   return "最终需求分析报告";
 });
 
-mock.module("../src/llm/agents/sub-agents", () => ({
+vi.mock("../src/llm/agents/sub-agents", () => ({
   extractAgent: { invoke: extractInvoke },
   clarifyAgent: { invoke: clarifyInvoke },
   analysisAgent: { invoke: analysisInvoke },
@@ -169,10 +169,10 @@ const {
   classifyIntentByKeywords,
   createAnalysisGraphWithTriage,
   runAnalysisGraph,
-} = require(
+} = await import(
   "../src/llm/graph/requirement-analysis-graph"
 ) as typeof import("../src/llm/graph/requirement-analysis-graph");
-const { runRequirementAnalysis } = require(
+const { runRequirementAnalysis } = await import(
   "../src/llm/agents/requirement-analysis"
 ) as typeof import("../src/llm/agents/requirement-analysis");
 

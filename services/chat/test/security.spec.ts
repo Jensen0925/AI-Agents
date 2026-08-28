@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { UnauthorizedException } from "@nestjs/common";
 import { inspectExternalContent, inspectInput, HARDENED_SYSTEM_SUFFIX } from "../src/security/input-guard";
 import { classify, isAllowed, requiresApproval } from "../src/security/tool-policy";
@@ -49,11 +49,12 @@ describe("工具白名单与沙箱", () => {
   });
 
   it("子进程不继承密钥环境，并受超时限制", async () => {
-    const sandbox = new ProcessSandbox({ workDir: "/tmp", timeoutMs: 40 });
+    const sandbox = new ProcessSandbox({ workDir: "/tmp", timeoutMs: 1_000 });
     const result = await sandbox.runNode('console.log(process.env.OPENAI_API_KEY ?? "NOT_FOUND")');
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe("NOT_FOUND");
-    await expect(sandbox.runNode("setInterval(() => {}, 1000)")).rejects.toBeInstanceOf(SandboxTimeoutError);
+    const timeoutSandbox = new ProcessSandbox({ workDir: "/tmp", timeoutMs: 40 });
+    await expect(timeoutSandbox.runNode("setInterval(() => {}, 1000)")).rejects.toBeInstanceOf(SandboxTimeoutError);
   }, 5_000);
 });
 

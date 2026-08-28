@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from "vitest";
 import { z as zv3 } from 'zod/v3';
 import {
   bridgeMCPToLangChain,
@@ -175,7 +175,9 @@ describe('多 Server 工具合并', () => {
 describe('MCP 错误处理', () => {
   it('未知工具返回协议错误而不是伪造成功结果', async () => {
     const { client } = await connectInMemory(createRequirementServer());
-    await expect(client.callTool({ name: 'not-exist', arguments: {} })).rejects.toThrow();
+    const result = await client.callTool({ name: 'not-exist', arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(contentText(result)).toMatch(/not-exist|unknown|不存在/i);
   });
 
   it('将文本、图片和其他 content 类型稳定序列化给 LangChain', () => {

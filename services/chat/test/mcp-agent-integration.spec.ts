@@ -1,5 +1,5 @@
 import { tool, type StructuredToolInterface } from '@langchain/core/tools';
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it } from "vitest";
 import { z } from 'zod';
 import {
   MCPManager,

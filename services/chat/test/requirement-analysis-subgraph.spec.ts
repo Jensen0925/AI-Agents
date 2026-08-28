@@ -1,5 +1,5 @@
 import { AIMessage } from "@langchain/core/messages";
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it, vi } from "vitest";
 import type {
   createAnalysisSubGraph as createAnalysisSubGraphType,
 } from "../src/llm/graph/requirement-analysis-graph";
@@ -77,10 +77,10 @@ function createFakeModel(options: {
 // 该测试只验证图的编排和工具闭环，不应在导入 graph 时读取真实 YAML 或
 // 初始化 OpenAI 客户端，因此把旧 Agent 和模型工厂替换成最小 fake。
 const defaultModel = createFakeModel({});
-mock.module("../src/llm/model.factory", () => ({
+vi.mock("../src/llm/model.factory", () => ({
   createChatModel: () => defaultModel,
 }));
-mock.module("../src/llm/agents/sub-agents", () => {
+vi.mock("../src/llm/agents/sub-agents", () => {
   const noopAgent = { invoke: async () => "" };
   return {
     analysisAgent: noopAgent,
@@ -91,7 +91,7 @@ mock.module("../src/llm/agents/sub-agents", () => {
   };
 });
 
-const { createAnalysisSubGraph, runAnalysisSubGraph } = require(
+const { createAnalysisSubGraph, runAnalysisSubGraph } = await import(
   "../src/llm/graph/requirement-analysis-graph",
 ) as typeof import("../src/llm/graph/requirement-analysis-graph");
 

@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it, vi } from "vitest";
 import { GUARDS_METADATA } from "@nestjs/common/constants";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { JwtAuthGuard } from "../src/auth/jwt-auth.guard";
@@ -30,7 +30,7 @@ describe("AI API boundaries", () => {
   });
 
   it("namespaces legacy memory sessions by authenticated user", async () => {
-    const chat = mock(async () => ({
+    const chat = vi.fn(async () => ({
       sessionId: "user-1:shared-session",
       input: "hello",
       message: "ok",

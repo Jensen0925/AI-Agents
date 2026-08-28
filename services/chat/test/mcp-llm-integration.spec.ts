@@ -2,7 +2,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ChatOpenAI } from '@langchain/openai';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from "vitest";
 import { z as zv3 } from 'zod/v3';
 import { bridgeMCPToLangChain } from '../src/mcp/mcp-to-langchain';
 import type { MCPClientService, MCPToolDefinition } from '../src/mcp/mcp-client.service';

@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { describe, expect, test } from "vitest";
 import { loadLangchainConfig } from "../src/config/load-langchain-config";
 import {
   resolveModelName,
@@ -89,13 +90,13 @@ describe("模型环境变量配置", () => {
       const { loadLangchainConfig } = await import("./src/config/load-langchain-config.ts");
       console.log(JSON.stringify(loadLangchainConfig().llm));
     `;
-    const processResult = Bun.spawnSync(["bun", "-e", script], {
+    const output = execFileSync(process.execPath, ["--import", "tsx/esm", "-e", script], {
       cwd: process.cwd(),
       env: { ...process.env, OPENAI_MODEL: "env-model" },
+      encoding: "utf8",
     });
 
-    expect(processResult.exitCode).toBe(0);
-    const llm = JSON.parse(processResult.stdout.toString());
+    const llm = JSON.parse(output);
     expect(llm.model).toBe("env-model");
     expect(llm.modelTiers).toEqual({
       high: "env-model",

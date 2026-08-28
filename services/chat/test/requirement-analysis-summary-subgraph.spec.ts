@@ -1,5 +1,5 @@
 import { AIMessage } from "@langchain/core/messages";
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it, vi } from "vitest";
 
 type CritiqueResult = {
   pass: boolean;
@@ -39,10 +39,10 @@ function createFakeModel(critiqueResults: CritiqueResult[]) {
   return model;
 }
 
-mock.module("../src/llm/model.factory", () => ({
+vi.mock("../src/llm/model.factory", () => ({
   createChatModel: () => createFakeModel([{ pass: true, critique: "" }]),
 }));
-mock.module("../src/llm/agents/sub-agents", () => {
+vi.mock("../src/llm/agents/sub-agents", () => {
   const noopAgent = { invoke: async () => "" };
   return {
     analysisAgent: noopAgent,
@@ -53,7 +53,7 @@ mock.module("../src/llm/agents/sub-agents", () => {
   };
 });
 
-const { createSummarySubGraph, MAX_SUMMARY_REVISIONS } = require(
+const { createSummarySubGraph, MAX_SUMMARY_REVISIONS } = await import(
   "../src/llm/graph/requirement-analysis-graph",
 ) as typeof import("../src/llm/graph/requirement-analysis-graph");
 

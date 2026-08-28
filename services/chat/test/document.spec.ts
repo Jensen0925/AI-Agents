@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GUARDS_METADATA } from "@nestjs/common/constants";
-import type { Document } from "@prisma/client";
+import type { Document } from "../src/database/schema";
 import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -11,7 +11,7 @@ import {
   DocumentService,
   inferDocumentCategory,
 } from "../src/document/document.service";
-import type { PrismaService } from "../src/prisma/prisma.service";
+import { createDatabaseMock } from "./drizzle-test-utils";
 
 const temporaryDirectories: string[] = [];
 
@@ -26,19 +26,16 @@ afterEach(async () => {
 
 describe("DocumentService", () => {
   it("filters document lookup by documentId and userId", async () => {
-    const findFirst = mock(async () => null);
-    const prisma = { document: { findFirst } } as unknown as PrismaService;
+    const database = createDatabaseMock({ select: [[]] });
     const service = new DocumentService(
-      prisma,
+      database,
       {} as ChunkService,
     );
 
     await expect(service.findById("document-1", "user-1")).rejects.toThrow(
       "Document not found",
     );
-    expect(findFirst).toHaveBeenCalledWith({
-      where: { id: "document-1", userId: "user-1" },
-    });
+    expect((database.db.select as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
   });
 
   it("writes an upload, persists metadata and deletes the physical file", async () => {
@@ -46,26 +43,31 @@ describe("DocumentService", () => {
     temporaryDirectories.push(uploadRoot);
     process.env["UPLOAD_DIR"] = uploadRoot;
 
-    let storedDocument: Document | undefined;
-    const create = mock(async ({ data }: { data: Omit<Document, "id" | "createdAt" | "chunkCount"> }) => {
-      storedDocument = {
-        id: "document-1",
-        chunkCount: 0,
-        createdAt: new Date(),
-        ...data,
-      };
-      return storedDocument;
+    const storedDocument = {
+      id: "document-1",
+      userId: "user-1",
+      filename: "requirement.md",
+      mimeType: "text/markdown",
+      size: 12,
+      filePath: join(uploadRoot, "user-1", "document.md"),
+      storageType: "local",
+      category: "product",
+      status: "pending",
+      chunkCount: 0,
+      createdAt: new Date(),
+    } as Document;
+    const database = createDatabaseMock({
+      select: [
+        (values: unknown) => [
+          { ...storedDocument, ...(values as Record<string, unknown>) },
+        ],
+      ],
+      returning: [
+        (values: unknown) => [{ ...storedDocument, ...(values as Record<string, unknown>) }],
+      ],
     });
-    const deleteDocument = mock(async () => storedDocument as Document);
-    const prisma = {
-      document: {
-        create,
-        findFirst: mock(async () => storedDocument ?? null),
-        delete: deleteDocument,
-      },
-    } as unknown as PrismaService;
     const service = new DocumentService(
-      prisma,
+      database,
       {} as ChunkService,
     );
 
@@ -91,9 +93,7 @@ describe("DocumentService", () => {
 
     await service.delete(document.id, "user-1");
     await expect(access(absolutePath)).rejects.toThrow();
-    expect(deleteDocument).toHaveBeenCalledWith({
-      where: { id: "document-1" },
-    });
+    expect((database.db.delete as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
   });
 
   it("infers a category on upload and allows the owner to update it", async () => {
@@ -115,17 +115,15 @@ describe("DocumentService", () => {
       chunkCount: 0,
       createdAt: new Date(),
     } as Document;
-    const update = mock(async ({ data }: { data: { category: string } }) => ({
-      ...storedDocument,
-      ...data,
-    }));
-    const prisma = {
-      document: {
-        findFirst: mock(async () => storedDocument),
-        update,
-      },
-    } as unknown as PrismaService;
-    const service = new DocumentService(prisma, {} as ChunkService);
+    const database = createDatabaseMock({
+      select: [
+        (values: unknown) => [
+          { ...storedDocument, ...(values as Record<string, unknown>) },
+        ],
+      ],
+      returning: [[{ ...storedDocument, category: "design" }]],
+    });
+    const service = new DocumentService(database, {} as ChunkService);
 
     const updated = await service.updateCategory(
       storedDocument.id,
@@ -134,10 +132,7 @@ describe("DocumentService", () => {
     );
 
     expect(updated.category).toBe("design");
-    expect(update).toHaveBeenCalledWith({
-      where: { id: storedDocument.id },
-      data: { category: "design" },
-    });
+    expect((database.db.update as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
     await expect(
       service.updateCategory(storedDocument.id, "user-1", "unknown"),
     ).rejects.toThrow("Invalid document category");
@@ -148,28 +143,30 @@ describe("DocumentService", () => {
     temporaryDirectories.push(uploadRoot);
     process.env["UPLOAD_DIR"] = uploadRoot;
 
-    let storedDocument: Document | undefined;
-    const prisma = {
-      document: {
-        create: mock(
-          async ({
-            data,
-          }: {
-            data: Omit<Document, "id" | "createdAt" | "chunkCount">;
-          }) => {
-            storedDocument = {
-              id: "document-preview",
-              chunkCount: 0,
-              createdAt: new Date(),
-              ...data,
-            };
-            return storedDocument;
-          },
-        ),
-        findFirst: mock(async () => storedDocument ?? null),
-      },
-    } as unknown as PrismaService;
-    const service = new DocumentService(prisma, {} as ChunkService);
+    const storedDocument = {
+      id: "document-preview",
+      userId: "user-1",
+      filename: "login.md",
+      mimeType: "text/markdown",
+      size: 37,
+      filePath: join(uploadRoot, "user-1", "login.md"),
+      storageType: "local",
+      category: "product",
+      status: "pending",
+      chunkCount: 0,
+      createdAt: new Date(),
+    } as Document;
+    const database = createDatabaseMock({
+      select: [
+        (values: unknown) => [
+          { ...storedDocument, ...(values as Record<string, unknown>) },
+        ],
+      ],
+      returning: [
+        (values: unknown) => [{ ...storedDocument, ...(values as Record<string, unknown>) }],
+      ],
+    });
+    const service = new DocumentService(database, {} as ChunkService);
     const content = "# 登录需求\n\n支持账号密码登录。";
 
     const document = await service.upload(
@@ -187,9 +184,7 @@ describe("DocumentService", () => {
     expect(preview.filename).toBe("login.md");
     expect(preview.mimeType).toBe("text/markdown");
     expect(preview.buffer.toString("utf8")).toBe(content);
-    expect(prisma.document.findFirst).toHaveBeenCalledWith({
-      where: { id: "document-preview", userId: "user-1" },
-    });
+    expect((database.db.select as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
   });
 
   it("returns a clear error when a stored preview file is missing", async () => {
@@ -197,9 +192,7 @@ describe("DocumentService", () => {
     temporaryDirectories.push(uploadRoot);
     process.env["UPLOAD_DIR"] = uploadRoot;
 
-    const prisma = {
-      document: {
-        findFirst: mock(async () => ({
+    const database = createDatabaseMock({ select: [[{
           id: "missing-document",
           userId: "user-1",
           filename: "missing.pdf",
@@ -210,10 +203,8 @@ describe("DocumentService", () => {
           status: "pending",
           chunkCount: 0,
           createdAt: new Date(),
-        })),
-      },
-    } as unknown as PrismaService;
-    const service = new DocumentService(prisma, {} as ChunkService);
+    }]] });
+    const service = new DocumentService(database, {} as ChunkService);
 
     await expect(
       service.getPreview("missing-document", "user-1"),

@@ -1,5 +1,5 @@
-import { describe, expect, it, mock } from "bun:test";
-import { MessageRole } from "@prisma/client";
+import { describe, expect, it, vi } from "vitest";
+import { MessageRole } from "../src/database/schema";
 import { RunnableMemoryService } from "../src/llm/memory/runnable-memory.service";
 import type { MessageService } from "../src/message/message.service";
 
@@ -9,7 +9,7 @@ describe("RunnableMemoryService", () => {
       string,
       Array<{ role: MessageRole; content: string }>
     >();
-    const addMessage = mock(
+    const addMessage = vi.fn(
       async (conversationId: string, role: MessageRole, content: string) => {
         const history = histories.get(conversationId) ?? [];
         history.push({ role, content });
@@ -17,12 +17,12 @@ describe("RunnableMemoryService", () => {
         return {};
       },
     );
-    const getHistory = mock(async (conversationId: string) =>
+    const getHistory = vi.fn(async (conversationId: string) =>
       (histories.get(conversationId) ?? []).map((message) => ({
         ...message,
       })),
     );
-    const clearHistory = mock(async (conversationId: string) => {
+    const clearHistory = vi.fn(async (conversationId: string) => {
       histories.delete(conversationId);
     });
     const messageService = {

@@ -1,4 +1,4 @@
-import { describe, expect, it, mock } from "bun:test";
+import { describe, expect, it, vi } from "vitest";
 import type { RequirementResult } from "@cloudsage/contracts";
 import {
   GUARDS_METADATA,
@@ -33,7 +33,7 @@ describe("AppController requirement extraction", () => {
       constraints: ["必须绑定手机号", "密码至少8位"],
       entities: ["用户", "手机号", "密码"],
     };
-    const extract = mock(async () => expected);
+    const extract = vi.fn(async () => expected);
     const requirementService = { extract } as unknown as RequirementService;
     const controller = new AppController(requirementService);
 
@@ -44,7 +44,7 @@ describe("AppController requirement extraction", () => {
   });
 
   it("rejects an empty input before calling the model", () => {
-    const extract = mock(async () => ({}) as RequirementResult);
+    const extract = vi.fn(async () => ({}) as RequirementResult);
     const requirementService = { extract } as unknown as RequirementService;
     const controller = new AppController(requirementService);
 

@@ -1,6 +1,6 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { AIMessage } from "@langchain/core/messages";
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import {
   PipelineState,
   evaluatorNode,
