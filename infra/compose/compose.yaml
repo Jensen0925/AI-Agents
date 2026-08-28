@@ -35,7 +35,7 @@ services:
     volumes:
       - api_uploads:/workspace/services/chat/uploads
     healthcheck:
-      test: ["CMD", "bun", "-e", "const response = await fetch('http://127.0.0.1:3001/health'); if (!response.ok) process.exit(1);"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"]
       interval: 5s
       timeout: 3s
       retries: 20

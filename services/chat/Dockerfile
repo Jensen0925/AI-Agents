@@ -1,13 +1,13 @@
-FROM oven/bun:1.3.12 AS dependencies
+FROM node:22-bookworm-slim AS dependencies
 
 WORKDIR /workspace
 
-COPY package.json bun.lock bunfig.toml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY clients/chat-web/package.json clients/chat-web/package.json
 COPY services/chat/package.json services/chat/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 
-RUN bun install --frozen-lockfile
+RUN corepack enable && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile
 
 FROM dependencies AS builder
 
@@ -15,9 +15,9 @@ COPY turbo.json tsconfig.base.json ./
 COPY services/chat services/chat
 COPY packages/contracts packages/contracts
 
-RUN bun run build --filter=@cloudsage/chat
+RUN pnpm run build --filter=@cloudsage/chat
 
-FROM oven/bun:1.3.12 AS runner
+FROM node:22-bookworm-slim AS runner
 
 WORKDIR /workspace/services/chat
 
@@ -28,4 +28,4 @@ COPY --from=builder /workspace /workspace
 
 EXPOSE 3001
 
-CMD ["sh", "-c", "bun run db:deploy && bun run db:seed && bun dist/main.js"]
+CMD ["sh", "-c", "pnpm db:deploy && pnpm db:seed && node dist/main.js"]

@@ -4,7 +4,7 @@ services:
     command:
       - sh
       - -c
-      - bun install --frozen-lockfile && bun run --cwd services/chat db:deploy && bun run --cwd services/chat db:seed && bun run dev:chat
+      - corepack pnpm install --frozen-lockfile && corepack pnpm --filter @cloudsage/chat db:deploy && corepack pnpm --filter @cloudsage/chat db:seed && corepack pnpm run dev:chat
     environment:
       NODE_ENV: development
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/cloudsage
@@ -27,7 +27,7 @@ services:
     command:
       - sh
       - -c
-      - bun install --frozen-lockfile && bun run dev:chat-web
+      - corepack pnpm install --frozen-lockfile && corepack pnpm run dev:chat-web
     environment:
       NODE_ENV: development
       NEXT_PUBLIC_API_BASE_URL: http://api:3001
@@ -46,7 +46,7 @@ services:
     command:
       - sh
       - -c
-      - bun install --frozen-lockfile && bun run dev:admin-web
+      - corepack pnpm install --frozen-lockfile && corepack pnpm run dev:admin-web
     environment:
       NODE_ENV: development
       NEXT_PUBLIC_API_BASE_URL: http://api:3001

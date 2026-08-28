@@ -2,12 +2,15 @@
   "name": "@cloudsage/contracts",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
-    "build": "tsc --declaration --emitDeclarationOnly --outDir dist --noEmit false",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').writeFileSync('dist/package.json', '{\\\"type\\\":\\\"commonjs\\\"}\\n')\"",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

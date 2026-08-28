@@ -1,13 +1,13 @@
-FROM oven/bun:1.3.12 AS dependencies
+FROM node:22-bookworm-slim AS dependencies
 
 WORKDIR /workspace
 
-COPY package.json bun.lock bunfig.toml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY clients/chat-web/package.json clients/chat-web/package.json
 COPY services/chat/package.json services/chat/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 
-RUN bun install --frozen-lockfile
+RUN corepack enable && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile
 
 FROM dependencies AS builder
 
@@ -18,9 +18,9 @@ COPY turbo.json tsconfig.base.json ./
 COPY clients/chat-web clients/chat-web
 COPY packages/contracts packages/contracts
 
-RUN bun run build --filter=@cloudsage/chat-web
+RUN pnpm run build --filter=@cloudsage/chat-web
 
-FROM oven/bun:1.3.12 AS runner
+FROM node:22-bookworm-slim AS runner
 
 WORKDIR /app
 
@@ -33,4 +33,4 @@ COPY --from=builder /workspace/clients/chat-web/.next/static ./clients/chat-web/
 
 EXPOSE 3002
 
-CMD ["bun", "clients/chat-web/server.js"]
+CMD ["node", "clients/chat-web/server.js"]

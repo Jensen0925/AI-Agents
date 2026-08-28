@@ -1,6 +1,6 @@
 # CloudSage
 
-CloudSage 是一个 Bun workspaces monorepo，包含 NestJS API、独立的 AI 聊天端与管理端、共享 contracts，以及 PostgreSQL/pgvector 基础设施。聊天端保持参考项目的窄版需求分析界面；管理端提供登录、工作台、用户、角色、权限和个人信息页面。
+CloudSage 是一个 pnpm workspaces monorepo，使用 Node.js 22 运行服务，包含 NestJS API、独立的 AI 聊天端与管理端、共享 contracts，以及 PostgreSQL/pgvector 基础设施。聊天端保持参考项目的窄版需求分析界面；管理端提供登录、工作台、用户、角色、权限和个人信息页面。
 
 ## 目录
 
@@ -16,10 +16,10 @@ infra/compose          Docker Compose 与开发覆盖配置
 
 ### 1. 安装依赖
 
-需要 Bun 1.3+、Docker Desktop 和可用的 PostgreSQL 17/pgvector 镜像。
+需要 Node.js 22+、pnpm 10.34.5、Docker Desktop 和可用的 PostgreSQL 17/pgvector 镜像。
 
 ```bash
-bun install
+pnpm install
 ```
 
 ### 2. 启动 PostgreSQL
@@ -38,7 +38,7 @@ docker compose -f infra/compose/compose.yaml up -d
 - 管理端工作台：[http://localhost:3003/dashboard](http://localhost:3003/dashboard)
 - API 健康检查：[http://localhost:3001/health](http://localhost:3001/health)
 
-API 容器启动时会自动执行 `prisma migrate deploy` 和 `prisma db seed`。seed 会创建全部权限、`super_admin` 角色和初始管理员。
+API 容器启动时会自动执行 Drizzle migration 和 seed。seed 会创建全部权限、`super_admin` 角色和初始管理员。
 
 默认管理员：
 
@@ -72,6 +72,7 @@ OPENAI_MODEL=deepseek-v4-pro
 OPENAI_MODEL_HIGH=deepseek-v4-pro
 OPENAI_MODEL_MEDIUM=deepseek-v4-flash
 OPENAI_MODEL_COMPRESSOR=deepseek-v4-flash
+EMBEDDING_MODEL=Xenova/paraphrase-multilingual-MiniLM-L12-v2
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/cloudsage
 JWT_SECRET=replace-with-a-long-local-secret
 PORT=3001
@@ -80,20 +81,20 @@ ADMIN_EMAIL=admin@cloudsage.local
 ADMIN_PASSWORD=Cloudsage@123
 ```
 
-执行迁移、生成客户端和初始化数据：
+执行迁移、生成迁移文件和初始化数据：
 
 ```bash
-bun run --cwd services/chat db:deploy
-bun run --cwd services/chat db:generate
-bun run --cwd services/chat db:seed
+pnpm --filter @cloudsage/chat db:deploy
+pnpm --filter @cloudsage/chat db:generate
+pnpm --filter @cloudsage/chat db:seed
 ```
 
 分别启动 API 和 Web：
 
 ```bash
-bun run dev:chat
-bun run dev:chat-web
-bun run dev:admin-web
+pnpm run dev:chat
+pnpm run dev:chat-web
+pnpm run dev:admin-web
 ```
 
 也可以使用开发覆盖文件挂载源码：
@@ -133,8 +134,8 @@ curl http://localhost:3001/api/users \
 ## 验证
 
 ```bash
-bun run typecheck
-bun run --cwd services/chat db:generate
+pnpm run typecheck
+pnpm --filter @cloudsage/chat db:generate
 ```
 
 当前交付阶段不执行 `next build` 或其他构建命令；Compose 生产镜像构建时会执行对应的 Next/Nest 构建流程。

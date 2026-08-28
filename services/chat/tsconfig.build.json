@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": false,
+    "sourceMap": true,
+    "paths": {
+      "@cloudsage/contracts": ["packages/contracts/dist/index.d.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["test", "scripts", "dist"]
+}

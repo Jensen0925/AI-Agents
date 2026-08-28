@@ -1,12 +1,12 @@
-FROM oven/bun:1.3.12 AS dependencies
+FROM node:22-bookworm-slim AS dependencies
 
 WORKDIR /workspace
 
-COPY package.json bun.lock bunfig.toml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY clients/admin-web/package.json clients/admin-web/package.json
 COPY packages/contracts/package.json packages/contracts/package.json
 
-RUN bun install --frozen-lockfile
+RUN corepack enable && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile
 
 FROM dependencies AS builder
 
@@ -17,9 +17,9 @@ COPY turbo.json tsconfig.base.json ./
 COPY clients/admin-web clients/admin-web
 COPY packages/contracts packages/contracts
 
-RUN bun run build --filter=@cloudsage/admin-web
+RUN pnpm run build --filter=@cloudsage/admin-web
 
-FROM oven/bun:1.3.12 AS runner
+FROM node:22-bookworm-slim AS runner
 
 WORKDIR /app
 ENV HOSTNAME=0.0.0.0
@@ -31,4 +31,4 @@ COPY --from=builder /workspace/clients/admin-web/.next/static ./clients/admin-we
 
 EXPOSE 3003
 
-CMD ["bun", "clients/admin-web/server.js"]
+CMD ["node", "clients/admin-web/server.js"]
