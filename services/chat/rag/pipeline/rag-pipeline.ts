@@ -3,7 +3,7 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import {
   similaritySearch,
   type SearchResult,
-  type VectorStorePrisma,
+  type VectorStoreDatabase,
 } from "../retrieval/vector-store";
 
 export interface RagAskInput {
@@ -16,8 +16,8 @@ export interface RagAskInput {
    * 当前项目可传入 DocumentEmbeddingService.embedTexts 的单文本包装函数。
    */
   embedQuery: (question: string) => Promise<number[]>;
-  /** pgvector 仓储依赖；使用最小 Prisma 原生查询接口，便于测试替换。 */
-  prisma: VectorStorePrisma;
+  /** pgvector 仓储依赖；使用最小 SQL 接口，便于测试替换。 */
+  database: VectorStoreDatabase;
 }
 
 export interface RagAskOutput {
@@ -64,7 +64,7 @@ function responseContentToText(content: unknown): string {
  * 返回资料不足的说明，而不是依赖通用知识编造结论。
  */
 export async function ragAsk(input: RagAskInput): Promise<RagAskOutput> {
-  const { question, userId, topK = 5, model, embedQuery, prisma } = input;
+  const { question, userId, topK = 5, model, embedQuery, database } = input;
   const normalizedQuestion = question.trim();
   if (!normalizedQuestion) {
     throw new Error("question must be a non-empty string");
@@ -72,7 +72,7 @@ export async function ragAsk(input: RagAskInput): Promise<RagAskOutput> {
 
   // Step 1: 向量化并检索；userId 作为数据库过滤条件，保证知识库用户隔离。
   const queryVector = await embedQuery(normalizedQuestion);
-  const chunks = await similaritySearch(prisma, queryVector, {
+  const chunks = await similaritySearch(database, queryVector, {
     userId,
     topK,
   });

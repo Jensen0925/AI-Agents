@@ -1,5 +1,5 @@
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
-import { TaskStatus, type Document } from "@prisma/client";
+import { and, eq } from "drizzle-orm";
 import {
   BadRequestException,
   Injectable,
@@ -9,7 +9,13 @@ import {
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
-import { PrismaService } from "../prisma/prisma.service";
+import { DatabaseService } from "../database/database.service";
+import {
+  documentChunks,
+  documents,
+  type Document,
+  TaskStatus,
+} from "../database/schema";
 import { type EmitTaskEvent, SseService } from "../sse/sse.service";
 import { DocumentEmbeddingService } from "./embedding.service";
 import { extractText } from "./parsers/parser.factory";
@@ -38,7 +44,7 @@ export class ChunkService {
   });
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly database: DatabaseService,
     private readonly embeddingService: DocumentEmbeddingService,
     private readonly sseService: SseService,
   ) {}
@@ -51,9 +57,11 @@ export class ChunkService {
     documentId: string,
     userId: string,
   ): Promise<Document> {
-    const document = await this.prisma.document.findFirst({
-      where: { id: documentId, userId },
-    });
+    const [document] = await this.database.db
+      .select()
+      .from(documents)
+      .where(and(eq(documents.id, documentId), eq(documents.userId, userId)))
+      .limit(1);
     if (!document) {
       throw new NotFoundException("Document not found");
     }
@@ -61,10 +69,10 @@ export class ChunkService {
       throw new BadRequestException("Document has no local file");
     }
 
-    await this.prisma.document.update({
-      where: { id: document.id },
-      data: { status: "processing", chunkCount: 0 },
-    });
+    await this.database.db
+      .update(documents)
+      .set({ status: "processing", chunkCount: 0 })
+      .where(eq(documents.id, document.id));
     await this.emitTaskEvent(userId, {
       taskType: "document_processing",
       taskId: document.id,
@@ -92,32 +100,33 @@ export class ChunkService {
         throw new Error("Embedding count does not match chunk count");
       }
 
-      const completedDocument = await this.prisma.$transaction(
+      const completedDocument = await this.database.db.transaction(
         async (transaction) => {
-          await transaction.documentChunk.deleteMany({
-            where: { documentId: document.id },
-          });
+          await transaction
+            .delete(documentChunks)
+            .where(eq(documentChunks.documentId, document.id));
 
-          // Prisma 将 pgvector 声明为 Unsupported，因此使用参数化原生 SQL 写入。
-          for (let index = 0; index < chunks.length; index += 1) {
-            const vector = vectors[index];
-            if (!vector || vector.length === 0) {
+          const chunkRows = chunks.map((content, index) => {
+            const embedding = vectors[index];
+            if (!embedding || embedding.length === 0) {
               throw new Error(`Missing embedding for chunk ${index}`);
             }
-
-            const vectorLiteral = `[${vector.join(",")}]`;
-            await transaction.$executeRaw`
-              INSERT INTO "document_chunks"
-                ("id", "documentId", "content", "chunkIndex", "embedding")
-              VALUES
-                (${randomUUID()}, ${document.id}, ${chunks[index]}, ${index}, ${vectorLiteral}::vector)
-            `;
-          }
-
-          return transaction.document.update({
-            where: { id: document.id },
-            data: { status: "done", chunkCount: chunks.length },
+            return {
+              id: randomUUID(),
+              documentId: document.id,
+              content,
+              chunkIndex: index,
+              embedding,
+            };
           });
+          await transaction.insert(documentChunks).values(chunkRows);
+
+          const [updated] = await transaction
+            .update(documents)
+            .set({ status: "done", chunkCount: chunks.length })
+            .where(eq(documents.id, document.id))
+            .returning();
+          return updated!;
         },
       );
       await this.emitTaskEvent(userId, {
@@ -132,12 +141,12 @@ export class ChunkService {
       });
       return completedDocument;
     } catch (error) {
-      await this.prisma.document
-        .update({
-          where: { id: document.id },
-          data: { status: "error", chunkCount: 0 },
-        })
-        .catch(() => undefined);
+      try {
+        await this.database.db
+          .update(documents)
+          .set({ status: "error", chunkCount: 0 })
+          .where(eq(documents.id, document.id));
+      } catch {}
       const errorMessage =
         error instanceof Error ? error.message : "Document processing failed";
       await this.emitTaskEvent(userId, {
@@ -172,7 +181,9 @@ export class ChunkService {
   private resolveStoredPath(filePath: string): string {
     const absolutePath = isAbsolute(filePath)
       ? resolve(filePath)
-      : resolve(this.serviceRoot, filePath);
+      : filePath === "uploads" || filePath.startsWith(`uploads${sep}`)
+        ? resolve(this.uploadRoot, filePath === "uploads" ? "" : filePath.slice(`uploads${sep}`.length))
+        : resolve(this.serviceRoot, filePath);
     if (
       absolutePath !== this.uploadRoot &&
       !absolutePath.startsWith(`${this.uploadRoot}${sep}`)

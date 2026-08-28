@@ -1,9 +1,4 @@
-/**
- * pgvector 仓储层。
- *
- * Prisma 目前将 vector 标记为 Unsupported，因此这里仅通过 Prisma 的参数化原生
- * 查询读写，不引入额外的 pgvector 客户端依赖。
- */
+/** pgvector 仓储层，使用参数化 SQL 保持向量类型由 PostgreSQL 管理。 */
 
 export interface VectorStoreRecord {
   id: string;
@@ -45,9 +40,9 @@ interface RawSearchResult {
   distance: number | string;
 }
 
-/** 满足 Prisma `$queryRaw` / `$executeRaw` 标签调用方式的最小接口，便于单测注入。 */
-export interface VectorStorePrisma {
-  $queryRaw<T>(
+/** 满足向量仓储所需 SQL 执行能力的最小接口，便于单测注入。 */
+export interface VectorStoreDatabase {
+  query<T>(
     strings: TemplateStringsArray,
     ...values: unknown[]
   ): Promise<T>;
@@ -71,7 +66,7 @@ function asVectorLiteral(embedding: number[]): string {
  * 批量写入向量块；同一 `(documentId, chunkIndex)` 已存在时覆盖其内容、向量与模型名。
  */
 export async function upsertChunks(
-  prisma: VectorStorePrisma,
+  database: VectorStoreDatabase,
   records: VectorStoreRecord[],
 ): Promise<void> {
   if (records.length === 0) {
@@ -85,7 +80,7 @@ export async function upsertChunks(
 
   for (const record of records) {
     const vectorLiteral = asVectorLiteral(record.embedding);
-    await prisma.$queryRaw`
+    await database.query`
       INSERT INTO "document_chunks"
         ("id", "documentId", "content", "chunkIndex", "embedding", "modelName")
       VALUES
@@ -107,7 +102,7 @@ export async function upsertChunks(
  * PostgreSQL 错误。空库没有可比较的维度，直接返回空结果。
  */
 export async function similaritySearch(
-  prisma: VectorStorePrisma,
+  database: VectorStoreDatabase,
   queryVector: number[],
   options: SearchOptions = {},
 ): Promise<SearchResult[]> {
@@ -119,7 +114,7 @@ export async function similaritySearch(
   }
   const topK = Math.min(requestedTopK, 100);
 
-  const dimensionRows = await prisma.$queryRaw<RawDimensionRow[]>`
+  const dimensionRows = await database.query<RawDimensionRow[]>`
     SELECT vector_dims("embedding") AS "dimension"
     FROM "document_chunks"
     WHERE "embedding" IS NOT NULL
@@ -132,7 +127,7 @@ export async function similaritySearch(
   assertVectorDimension(queryVector, dimension);
 
   const vectorLiteral = asVectorLiteral(queryVector);
-  const rows = await prisma.$queryRaw<RawSearchResult[]>`
+  const rows = await database.query<RawSearchResult[]>`
     SELECT
       chunks."id",
       chunks."documentId",

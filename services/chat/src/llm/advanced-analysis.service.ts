@@ -33,7 +33,7 @@ import { createDeepOrchestrator } from "./deepagent/deep-orchestrator.service";
 import { detectLongChain } from "./agents/orchestrator.service";
 import { ArtifactService } from "../artifact/artifact.service";
 import { createConversationTitle } from "../conversation/conversation-title";
-import { PrismaService } from "../prisma/prisma.service";
+import { DatabaseService } from "../database/database.service";
 import { TokenUsageService } from "./cost/token-usage.service";
 import {
   classifyConversationRoute,
@@ -803,9 +803,9 @@ export class AdvancedAnalysisService {
     /** 报告工件是可选增强能力，归档失败不能影响用户本轮聊天。 */
     private readonly artifactService?: ArtifactService,
     /** 成本持久化是旁路能力，缺失时仍可运行完整需求分析。 */
-    prisma?: PrismaService,
+    database?: DatabaseService,
   ) {
-    this.tokenUsageService = prisma ? new TokenUsageService(prisma) : undefined;
+    this.tokenUsageService = database ? new TokenUsageService(database) : undefined;
   }
 
   /**

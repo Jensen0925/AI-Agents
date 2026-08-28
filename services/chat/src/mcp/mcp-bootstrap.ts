@@ -23,8 +23,10 @@ function registerServers(): void {
       name: "requirement-analyzer",
       prefix: "req_",
       client: new MCPClientService({
-        command: "bun",
+        command: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
         args: [
+          "exec",
+          "tsx",
           resolve(root, "services/mcp-requirement-completeness/src/index.ts"),
         ],
       }),
@@ -33,8 +35,8 @@ function registerServers(): void {
       name: "web-search",
       prefix: "ws_",
       client: new MCPClientService({
-        command: "bun",
-        args: [resolve(root, "mcp-servers/web-search/src/index.ts")],
+        command: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
+        args: ["exec", "tsx", resolve(root, "mcp-servers/web-search/src/index.ts")],
       }),
     })
     .registerServer({

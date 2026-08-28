@@ -8,7 +8,7 @@ import {
   Req,
   UseGuards,
 } from "@nestjs/common";
-import type { TaskEvent } from "@prisma/client";
+import type { TaskEvent } from "../database/schema";
 import {
   type AuthenticatedRequest,
   JwtAuthGuard,

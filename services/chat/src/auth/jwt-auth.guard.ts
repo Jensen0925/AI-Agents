@@ -4,9 +4,10 @@ import {
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
-import { UserStatus } from "@prisma/client";
+import { and, eq } from "drizzle-orm";
+import { DatabaseService } from "../database/database.service";
+import { permissions, rolePermissions, roles, userRoles, users, UserStatus } from "../database/schema";
 import { verifyAccessToken } from "./token";
-import { PrismaService } from "../prisma/prisma.service";
 
 export interface AuthenticatedUser {
   userId: string;
@@ -25,7 +26,7 @@ export interface AuthenticatedRequest {
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
@@ -45,26 +46,24 @@ export class JwtAuthGuard implements CanActivate {
       );
     }
 
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      include: {
-        roles: {
-          include: { role: { include: { permissions: { include: { permission: true } } } } },
-        },
-      },
-    });
+    const [user] = await this.database.db.select().from(users).where(eq(users.id, payload.sub)).limit(1);
     if (!user || user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException("User is not active");
     }
 
+    const access = await this.database.db
+      .select({ roleCode: roles.code, permissionCode: permissions.code })
+      .from(userRoles)
+      .innerJoin(roles, eq(roles.id, userRoles.roleId))
+      .leftJoin(rolePermissions, eq(rolePermissions.roleId, roles.id))
+      .leftJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
+      .where(eq(userRoles.userId, user.id));
     request.user = {
       userId: user.id,
       email: user.email,
       name: user.name,
-      roles: user.roles.map(({ role }) => role.code),
-      permissions: user.roles.flatMap(({ role }) =>
-        role.permissions.map(({ permission }) => permission.code),
-      ),
+      roles: [...new Set(access.map((item) => item.roleCode))],
+      permissions: [...new Set(access.flatMap((item) => item.permissionCode ? [item.permissionCode] : []))],
     };
     return true;
   }

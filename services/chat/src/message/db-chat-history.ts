@@ -3,7 +3,7 @@ import {
   type BaseMessage,
   type MessageContent,
 } from "@langchain/core/messages";
-import { MessageRole, type Prisma } from "@prisma/client";
+import { type JsonValue, MessageRole } from "../database/schema";
 import { MessageService } from "./message.service";
 
 function contentToText(content: MessageContent): string {
@@ -16,7 +16,7 @@ function contentToText(content: MessageContent): string {
     .join("");
 }
 
-function messageMetadata(message: BaseMessage): Prisma.InputJsonValue | undefined {
+function messageMetadata(message: BaseMessage): JsonValue | undefined {
   const metadata = {
     additional_kwargs: message.additional_kwargs,
     response_metadata: message.response_metadata,
@@ -24,7 +24,7 @@ function messageMetadata(message: BaseMessage): Prisma.InputJsonValue | undefine
 
   try {
     const serialized = JSON.stringify(metadata);
-    return serialized ? (JSON.parse(serialized) as Prisma.InputJsonValue) : undefined;
+    return serialized ? (JSON.parse(serialized) as JsonValue) : undefined;
   } catch {
     return undefined;
   }

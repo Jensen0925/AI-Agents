@@ -12,7 +12,7 @@ import { ConversationModule } from "./conversation/conversation.module";
 import { DocumentModule } from "./document/document.module";
 import { AdvancedModule } from "./llm/advanced.module";
 import { LlmModule } from "./llm/llm.module";
-import { PrismaModule } from "./prisma/prisma.module";
+import { DatabaseModule } from "./database/database.module";
 import { SseModule } from "./sse/sse.module";
 import { AuthModule } from "./auth/auth.module";
 import { UsersModule } from "./users/users.module";
@@ -25,7 +25,7 @@ import { closeMcp, initMcp } from "./mcp/mcp-bootstrap";
 
 @Module({
   imports: [
-    PrismaModule,
+    DatabaseModule,
     ScheduleModule.forRoot(),
     SseModule,
     ConversationModule,

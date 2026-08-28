@@ -3,8 +3,15 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { UserStatus } from "@prisma/client";
-import { PrismaService } from "../prisma/prisma.service";
+import { count, desc, eq, ilike, or } from "drizzle-orm";
+import { DatabaseService } from "../database/database.service";
+import {
+  roles,
+  userRoles,
+  users,
+  UserStatus,
+} from "../database/schema";
+import { hashPassword } from "../auth/password";
 
 interface UserInput {
   email?: string;
@@ -16,11 +23,7 @@ interface UserInput {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
-
-  private readonly include = {
-    roles: { include: { role: true } },
-  } as const;
+  constructor(private readonly database: DatabaseService) {}
 
   private present<T extends { passwordHash: string }>(user: T) {
     const { passwordHash: _passwordHash, ...safe } = user;
@@ -30,32 +33,33 @@ export class UsersService {
   async list(query = "", page = 1, pageSize = 10) {
     const normalizedPage = Math.max(1, Number(page) || 1);
     const normalizedSize = Math.min(100, Math.max(1, Number(pageSize) || 10));
-    const where = query.trim()
-      ? { OR: [{ name: { contains: query.trim(), mode: "insensitive" as const } }, { email: { contains: query.trim(), mode: "insensitive" as const } }] }
-      : {};
-    const [total, users] = await Promise.all([
-      this.prisma.user.count({ where }),
-      this.prisma.user.findMany({
-        where,
-        include: this.include,
-        orderBy: { createdAt: "desc" },
-        skip: (normalizedPage - 1) * normalizedSize,
-        take: normalizedSize,
-      }),
+    const normalizedQuery = query.trim();
+    const where = normalizedQuery
+      ? or(ilike(users.name, `%${normalizedQuery}%`), ilike(users.email, `%${normalizedQuery}%`))
+      : undefined;
+    const [total, userRows] = await Promise.all([
+      this.database.db.select({ count: count() }).from(users).where(where),
+      this.database.db.select().from(users).where(where)
+        .orderBy(desc(users.createdAt))
+        .limit(normalizedSize)
+        .offset((normalizedPage - 1) * normalizedSize),
     ]);
+    const totalCount = total[0]?.count ?? 0;
+    const enriched = await this.withRoles(userRows);
     return {
-      items: users.map((user) => this.present(user)),
-      total,
+      items: enriched.map((user) => this.present(user)),
+      total: totalCount,
       page: normalizedPage,
       pageSize: normalizedSize,
-      totalPages: Math.max(1, Math.ceil(total / normalizedSize)),
+      totalPages: Math.max(1, Math.ceil(totalCount / normalizedSize)),
     };
   }
 
   async findById(id: string) {
-    const user = await this.prisma.user.findUnique({ where: { id }, include: this.include });
+    const [user] = await this.database.db.select().from(users).where(eq(users.id, id)).limit(1);
     if (!user) throw new NotFoundException("用户不存在");
-    return this.present(user);
+    const [enriched] = await this.withRoles([user]);
+    return this.present(enriched!);
   }
 
   async create(input: UserInput) {
@@ -63,19 +67,21 @@ export class UsersService {
       throw new ConflictException("email、name、password 均为必填");
     }
     try {
-      const user = await this.prisma.user.create({
-        data: {
-          email: input.email.trim().toLowerCase(),
-          name: input.name.trim(),
-          passwordHash: await Bun.password.hash(input.password, { algorithm: "argon2id" }),
-          status: input.status ?? UserStatus.ACTIVE,
-          roles: input.roleIds?.length ? { create: input.roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) } : undefined,
-        },
-        include: this.include,
-      });
-      return this.present(user);
+      const [user] = await this.database.db.insert(users).values({
+        id: crypto.randomUUID(),
+        email: input.email.trim().toLowerCase(),
+        name: input.name.trim(),
+        passwordHash: await hashPassword(input.password),
+        status: input.status ?? UserStatus.ACTIVE,
+        updatedAt: new Date(),
+      }).returning();
+      if (input.roleIds?.length) {
+        await this.database.db.insert(userRoles).values(input.roleIds.map((roleId) => ({ userId: user!.id, roleId })));
+      }
+      const [enriched] = await this.withRoles([user!]);
+      return this.present(enriched!);
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+      if (error && typeof error === "object" && "code" in error && error.code === "23505") {
         throw new ConflictException("邮箱已存在");
       }
       throw error;
@@ -84,34 +90,48 @@ export class UsersService {
 
   async update(id: string, input: UserInput) {
     await this.findById(id);
-    const user = await this.prisma.user.update({
-      where: { id },
-      data: {
-        email: input.email?.trim().toLowerCase(),
-        name: input.name?.trim(),
-        status: input.status,
-        passwordHash: input.password ? await Bun.password.hash(input.password, { algorithm: "argon2id" }) : undefined,
-        roles: input.roleIds
-          ? { deleteMany: {}, create: input.roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) }
-          : undefined,
-      },
-      include: this.include,
-    });
-    return this.present(user);
+    const updates = {
+      ...(input.email === undefined ? {} : { email: input.email.trim().toLowerCase() }),
+      ...(input.name === undefined ? {} : { name: input.name.trim() }),
+      ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.password ? { passwordHash: await hashPassword(input.password) } : {}),
+      updatedAt: new Date(),
+    };
+    const [user] = await this.database.db.update(users).set(updates).where(eq(users.id, id)).returning();
+    if (input.roleIds) {
+      await this.database.db.transaction(async (transaction) => {
+        await transaction.delete(userRoles).where(eq(userRoles.userId, id));
+        if (input.roleIds!.length) {
+          await transaction.insert(userRoles).values(input.roleIds!.map((roleId) => ({ userId: id, roleId })));
+        }
+      });
+    }
+    const [enriched] = await this.withRoles([user!]);
+    return this.present(enriched!);
   }
 
   async remove(id: string) {
     await this.findById(id);
-    await this.prisma.user.delete({ where: { id } });
+    await this.database.db.delete(users).where(eq(users.id, id));
     return { ok: true };
   }
 
   async updateProfile(id: string, input: { name?: string }) {
-    const user = await this.prisma.user.update({
-      where: { id },
-      data: { name: input.name?.trim() },
-      include: this.include,
-    });
-    return this.present(user);
+    const [user] = await this.database.db.update(users).set({ name: input.name?.trim(), updatedAt: new Date() }).where(eq(users.id, id)).returning();
+    const [enriched] = await this.withRoles([user!]);
+    return this.present(enriched!);
+  }
+
+  private async withRoles(userRows: typeof users.$inferSelect[]) {
+    if (userRows.length === 0) return [];
+    const roleRows = await this.database.db
+      .select({ userId: userRoles.userId, role: roles })
+      .from(userRoles)
+      .innerJoin(roles, eq(roles.id, userRoles.roleId))
+      .where(or(...userRows.map((user) => eq(userRoles.userId, user.id))));
+    return userRows.map((user) => ({
+      ...user,
+      roles: roleRows.filter((row) => row.userId === user.id).map(({ role }) => ({ role })),
+    }));
   }
 }

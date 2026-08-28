@@ -121,12 +121,12 @@ export function createDefaultMCPManager(
     ? process.cwd().slice(0, -'/services/chat'.length)
     : process.cwd();
   const requirementConfig = configs.requirementAnalyzer ?? {
-    command: 'bun',
-    args: [`${root}/services/mcp-requirement-completeness/src/index.ts`],
+    command: process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
+    args: ['exec', 'tsx', `${root}/services/mcp-requirement-completeness/src/index.ts`],
   };
   const webSearchConfig = configs.webSearch ?? {
-    command: 'bun',
-    args: [`${root}/mcp-servers/web-search/src/index.ts`],
+    command: process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
+    args: ['exec', 'tsx', `${root}/mcp-servers/web-search/src/index.ts`],
   };
   const manager = new MCPManager({
     ...options,

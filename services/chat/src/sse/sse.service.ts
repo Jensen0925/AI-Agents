@@ -1,8 +1,14 @@
-import { TaskStatus, type Prisma, type TaskEvent } from "@prisma/client";
+import { and, asc, count, desc, eq, isNull, lt } from "drizzle-orm";
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { Cron, Interval } from "@nestjs/schedule";
 import type { Response } from "express";
-import { PrismaService } from "../prisma/prisma.service";
+import { DatabaseService } from "../database/database.service";
+import {
+  taskEvents,
+  type JsonValue,
+  type TaskEvent,
+  type TaskStatus,
+} from "../database/schema";
 
 const TASK_EVENT_RETENTION_DAYS = 30;
 
@@ -11,7 +17,7 @@ export interface EmitTaskEvent {
   taskId: string;
   status: TaskStatus;
   message?: string;
-  metadata?: Prisma.InputJsonValue;
+  metadata?: JsonValue;
 }
 
 export interface PaginatedTaskEvents {
@@ -30,7 +36,7 @@ export interface PaginatedTaskEvents {
 export class SseService {
   private readonly connections = new Map<string, Set<Response>>();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
 
   /** 注册用户连接；Set 可避免同一个 Response 被重复加入。 */
   addConnection(userId: string, response: Response): void {
@@ -57,16 +63,18 @@ export class SseService {
    * 数据库写入失败时不会发送瞬时事件，保证历史记录与实时消息顺序一致。
    */
   async emit(userId: string, event: EmitTaskEvent): Promise<TaskEvent> {
-    const persistedEvent = await this.prisma.taskEvent.create({
-      data: {
+    const [persistedEvent] = await this.database.db
+      .insert(taskEvents)
+      .values({
+        id: crypto.randomUUID(),
         userId,
         taskType: event.taskType,
         taskId: event.taskId,
         status: event.status,
         message: event.message,
         metadata: event.metadata,
-      },
-    });
+      })
+      .returning();
     const payload = [
       `id: ${persistedEvent.id}`,
       "event: task",
@@ -98,32 +106,36 @@ export class SseService {
     pageSize: number,
   ): Promise<PaginatedTaskEvents> {
     const skip = (page - 1) * pageSize;
-    const where = { userId };
     const [items, total] = await Promise.all([
-      this.prisma.taskEvent.findMany({
-        where,
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        skip,
-        take: pageSize,
-      }),
-      this.prisma.taskEvent.count({ where }),
+      this.database.db
+        .select()
+        .from(taskEvents)
+        .where(eq(taskEvents.userId, userId))
+        .orderBy(desc(taskEvents.createdAt), desc(taskEvents.id))
+        .limit(pageSize)
+        .offset(skip),
+      this.database.db
+        .select({ count: count() })
+        .from(taskEvents)
+        .where(eq(taskEvents.userId, userId)),
     ]);
 
     return {
       items,
       page,
       pageSize,
-      total,
-      totalPages: Math.ceil(total / pageSize),
+      total: total[0]?.count ?? 0,
+      totalPages: Math.ceil((total[0]?.count ?? 0) / pageSize),
     };
   }
 
   /** 返回当前用户指定 taskId 的完整状态时间线。 */
   async findByTaskId(userId: string, taskId: string): Promise<TaskEvent[]> {
-    const events = await this.prisma.taskEvent.findMany({
-      where: { userId, taskId },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    });
+    const events = await this.database.db
+      .select()
+      .from(taskEvents)
+      .where(and(eq(taskEvents.userId, userId), eq(taskEvents.taskId, taskId)))
+      .orderBy(asc(taskEvents.createdAt), asc(taskEvents.id));
     if (events.length === 0) {
       throw new NotFoundException("Task not found");
     }
@@ -138,12 +150,19 @@ export class SseService {
   ): Promise<{ taskId: string; updated: number; readAt: Date }> {
     await this.findByTaskId(userId, taskId);
     const readAt = new Date();
-    const result = await this.prisma.taskEvent.updateMany({
-      where: { userId, taskId, readAt: null },
-      data: { readAt },
-    });
+    const updated = await this.database.db
+      .update(taskEvents)
+      .set({ readAt })
+      .where(
+        and(
+          eq(taskEvents.userId, userId),
+          eq(taskEvents.taskId, taskId),
+          isNull(taskEvents.readAt),
+        ),
+      )
+      .returning({ id: taskEvents.id });
 
-    return { taskId, updated: result.count, readAt };
+    return { taskId, updated: updated.length, readAt };
   }
 
   /** 每分钟移除已经关闭但未触发 close 回调的连接。 */
@@ -167,9 +186,10 @@ export class SseService {
     const cutoff = new Date(
       Date.now() - TASK_EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
     );
-    const result = await this.prisma.taskEvent.deleteMany({
-      where: { createdAt: { lt: cutoff } },
-    });
-    return result.count;
+    const deleted = await this.database.db
+      .delete(taskEvents)
+      .where(lt(taskEvents.createdAt, cutoff))
+      .returning({ id: taskEvents.id });
+    return deleted.length;
   }
 }

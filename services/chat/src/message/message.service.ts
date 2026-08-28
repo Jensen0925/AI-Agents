@@ -3,12 +3,10 @@ import {
   type BaseMessage,
   HumanMessage,
 } from "@langchain/core/messages";
-import {
-  MessageRole,
-  type Prisma,
-} from "@prisma/client";
 import { Injectable } from "@nestjs/common";
-import { PrismaService } from "../prisma/prisma.service";
+import { desc, eq } from "drizzle-orm";
+import { DatabaseService } from "../database/database.service";
+import { conversations, type JsonValue, MessageRole, type MessageRole as MessageRoleValue, messages } from "../database/schema";
 import {
   createConversationTitle,
   DEFAULT_CONVERSATION_TITLE,
@@ -17,47 +15,29 @@ import {
 /** 负责会话消息持久化，并在数据库消息与 LangChain 消息之间转换。 */
 @Injectable()
 export class MessageService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
 
   /**
    * 在事务中新增消息并刷新会话 updatedAt，保证会话排序与消息写入一致。
    */
   addMessage(
     conversationId: string,
-    role: MessageRole,
+    role: MessageRoleValue,
     content: string,
-    metadata?: Prisma.InputJsonValue,
+    metadata?: JsonValue,
   ) {
-    return this.prisma.$transaction(async (transaction) => {
-      const message = await transaction.message.create({
-        data: {
-          conversationId,
-          role,
-          content,
-          metadata,
-        },
-      });
+    return this.database.db.transaction(async (transaction) => {
+      const [message] = await transaction.insert(messages).values({ id: crypto.randomUUID(), conversationId, role, content, metadata }).returning();
 
       // 首条用户消息作为会话标题，后续消息不再覆盖用户已经看到的名称。
       const conversation =
         role === MessageRole.USER
-          ? await transaction.conversation.findUnique({
-              where: { id: conversationId },
-              select: { title: true },
-            })
+          ? (await transaction.select({ title: conversations.title }).from(conversations).where(eq(conversations.id, conversationId)).limit(1))[0]
           : null;
       const title = conversation?.title?.trim();
 
-      await transaction.conversation.update({
-        where: { id: conversationId },
-        data: {
-          updatedAt: new Date(),
-          ...(title === DEFAULT_CONVERSATION_TITLE
-            ? { title: createConversationTitle(content) }
-            : {}),
-        },
-      });
-      return message;
+      await transaction.update(conversations).set({ updatedAt: new Date(), ...(title === DEFAULT_CONVERSATION_TITLE ? { title: createConversationTitle(content) } : {}) }).where(eq(conversations.id, conversationId));
+      return message!;
     });
   }
 
@@ -70,21 +50,22 @@ export class MessageService {
       typeof limit === "number"
         ? Math.min(500, Math.max(1, Math.floor(limit)))
         : undefined;
-    const messages = await this.prisma.message.findMany({
-      where: { conversationId },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take,
-    });
+    const history = await this.database.db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conversationId))
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(take ?? 500);
 
-    return messages.reverse();
+    return history.reverse();
   }
 
   /** 将数据库 USER/ASSISTANT 角色转换为 LangChain HumanMessage/AIMessage。 */
   async getHistoryAsLangChainMessages(
     conversationId: string,
   ): Promise<BaseMessage[]> {
-    const messages = await this.getHistory(conversationId);
-    return messages.map((message) =>
+    const history = await this.getHistory(conversationId);
+    return history.map((message) =>
       message.role === MessageRole.USER
         ? new HumanMessage(message.content)
         : new AIMessage(message.content),
@@ -93,8 +74,6 @@ export class MessageService {
 
   /** 清空指定会话的全部消息，保留会话本身。 */
   async clearHistory(conversationId: string): Promise<void> {
-    await this.prisma.message.deleteMany({
-      where: { conversationId },
-    });
+    await this.database.db.delete(messages).where(eq(messages.conversationId, conversationId));
   }
 }

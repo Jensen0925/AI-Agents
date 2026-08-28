@@ -9,7 +9,7 @@ import {
   type Runnable,
 } from "@langchain/core/runnables";
 import { Injectable } from "@nestjs/common";
-import { MessageRole } from "@prisma/client";
+import { MessageRole } from "../../database/schema";
 import { DbChatHistory } from "../../message/db-chat-history";
 import { MessageService } from "../../message/message.service";
 import { createChatModel } from "../model.factory";

@@ -165,7 +165,7 @@ export function loadLangchainConfig(): LangchainConfig {
   }
 
   // 开发环境可能从 services/chat、仓库根目录或 Docker 工作目录启动。
-  // 不能只依赖 process.cwd() 的单一路径，否则 `bun run dev` 从根目录
+  // 不能只依赖 process.cwd() 的单一路径，否则从根目录启动时配置会丢失
   // 启动时会误报找不到配置，随后模型工厂和整个聊天请求都会降级/失败。
   const configCandidates = [
     resolve(process.cwd(), "config/langchain.yaml"),

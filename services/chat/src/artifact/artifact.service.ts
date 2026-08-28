@@ -1,11 +1,12 @@
-import { ArtifactType } from "@prisma/client";
 import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { and, desc, eq } from "drizzle-orm";
 import type { Response } from "express";
 import { createChatModel } from "../llm/model.factory";
-import { PrismaService } from "../prisma/prisma.service";
+import { DatabaseService, type Database } from "../database/database.service";
+import { artifacts, artifactVersions, ArtifactType, conversations } from "../database/schema";
 
 export interface UpsertArtifactInput {
   conversationId: string;
@@ -38,26 +39,14 @@ function text(value: unknown): string {
 
 /**
  * 报告工件允许在滚动发布期间晚于应用代码迁移。只有工件自身表不存在时
- * 才将它视为可选功能不可用；其它 Prisma 错误（权限、连接、数据约束等）
+ * 才将它视为可选功能不可用；其它数据库错误（权限、连接、数据约束等）
  * 必须继续向上抛出，避免掩盖真实故障。
  */
 function isArtifactSchemaUnavailable(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const prismaError = error as {
-    code?: unknown;
-    meta?: { table?: unknown };
-    message?: unknown;
-  };
-  if (prismaError.code !== "P2021") return false;
-
-  const detail = [
-    typeof prismaError.meta?.table === "string" ? prismaError.meta.table : "",
-    typeof prismaError.message === "string" ? prismaError.message : "",
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  return detail.includes("artifacts") || detail.includes("artifact_versions");
+  const candidate = error as { code?: unknown; message?: unknown };
+  if (candidate.code !== undefined && candidate.code !== "42P01") return false;
+  const message = error instanceof Error ? error.message : String(candidate.message ?? error);
+  return /relation ["']?(artifacts|artifact_versions)["']? does not exist/i.test(message);
 }
 
 /**
@@ -66,86 +55,65 @@ function isArtifactSchemaUnavailable(error: unknown): boolean {
  */
 @Injectable()
 export class ArtifactService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly database: DatabaseService) {}
+
+  private async loadArtifact(artifactId: string, userId: string) {
+    const [artifact] = await this.database.db.select().from(artifacts)
+      .where(and(eq(artifacts.id, artifactId), eq(artifacts.userId, userId))).limit(1);
+    if (!artifact) throw new NotFoundException("Artifact not found");
+    return artifact;
+  }
+
+  private async withVersions(
+    db: Pick<Database, "select">,
+    artifact: typeof artifacts.$inferSelect,
+  ) {
+    const versions = await db.select().from(artifactVersions)
+      .where(eq(artifactVersions.artifactId, artifact.id))
+      .orderBy(desc(artifactVersions.version))
+      .limit(10);
+    return { ...artifact, versions };
+  }
 
   async upsertGeneratedReport(input: UpsertArtifactInput) {
     await this.assertConversationOwner(input.conversationId, input.userId);
-    const existing = await this.prisma.artifact.findUnique({
-      where: { conversationId: input.conversationId },
-    });
+    const [existing] = await this.database.db.select().from(artifacts)
+      .where(eq(artifacts.conversationId, input.conversationId)).limit(1);
 
     if (!existing) {
-      return this.prisma.$transaction(async (transaction) => {
-        const artifact = await transaction.artifact.create({
-          data: {
-            conversationId: input.conversationId,
-            userId: input.userId,
-            title: input.title,
-            content: input.content,
-            type: input.type ?? ArtifactType.MARKDOWN,
-            language: input.language,
-            currentVersion: 1,
-            versions: {
-              create: {
-                version: 1,
-                content: input.content,
-                sourceTags: ["AI"],
-                sourceMessageId: input.sourceMessageId,
-              },
-            },
-          },
-          include: { versions: true },
+      return this.database.db.transaction(async (transaction) => {
+        const [artifact] = await transaction.insert(artifacts).values({
+          id: crypto.randomUUID(), conversationId: input.conversationId, userId: input.userId,
+          title: input.title, content: input.content, type: input.type ?? ArtifactType.MARKDOWN,
+          language: input.language, currentVersion: 1, updatedAt: new Date(),
+        }).returning();
+        await transaction.insert(artifactVersions).values({
+          id: crypto.randomUUID(), artifactId: artifact!.id, version: 1, content: input.content,
+          sourceTags: ["AI"], sourceMessageId: input.sourceMessageId,
         });
-        await transaction.conversation.update({
-          where: { id: input.conversationId },
-          data: { title: input.title },
-        });
-        return artifact;
+        await transaction.update(conversations).set({ title: input.title, updatedAt: new Date() })
+          .where(eq(conversations.id, input.conversationId));
+        return this.withVersions(transaction, artifact!);
       });
     }
 
     const nextVersion = existing.currentVersion + 1;
-    return this.prisma.$transaction(async (transaction) => {
-      const artifact = await transaction.artifact.update({
-        where: { id: existing.id },
-        data: {
-          title: input.title,
-          content: input.content,
-          type: input.type ?? existing.type,
-          language: input.language ?? existing.language,
-          currentVersion: nextVersion,
-          versions: {
-            create: {
-              version: nextVersion,
-              content: input.content,
-              changelog: "AI 重新生成分析报告",
-              sourceTags: ["AI"],
-              sourceMessageId: input.sourceMessageId,
-            },
-          },
-        },
-        include: { versions: true },
-      });
-      await transaction.conversation.update({
-        where: { id: input.conversationId },
-        data: { title: input.title },
-      });
-      return artifact;
+    return this.database.db.transaction(async (transaction) => {
+      const [artifact] = await transaction.update(artifacts).set({ title: input.title, content: input.content,
+        type: input.type ?? existing.type, language: input.language ?? existing.language,
+        currentVersion: nextVersion, updatedAt: new Date() }).where(eq(artifacts.id, existing.id)).returning();
+      await transaction.insert(artifactVersions).values({ id: crypto.randomUUID(), artifactId: existing.id,
+        version: nextVersion, content: input.content, changelog: "AI 重新生成分析报告", sourceTags: ["AI"], sourceMessageId: input.sourceMessageId });
+      await transaction.update(conversations).set({ title: input.title, updatedAt: new Date() }).where(eq(conversations.id, input.conversationId));
+      return this.withVersions(transaction, artifact!);
     });
   }
 
   async findByConversation(conversationId: string, userId: string) {
     await this.assertConversationOwner(conversationId, userId);
     try {
-      return await this.prisma.artifact.findFirst({
-        where: { conversationId, userId },
-        include: {
-          versions: {
-            orderBy: { version: "desc" },
-            take: 10,
-          },
-        },
-      });
+      const [artifact] = await this.database.db.select().from(artifacts).where(and(eq(artifacts.conversationId, conversationId), eq(artifacts.userId, userId))).limit(1);
+      return artifact ? this.withVersions(this.database.db, artifact) : null;
     } catch (error) {
       if (!isArtifactSchemaUnavailable(error)) throw error;
       // 新旧服务版本交叠时，读取工件不能干扰主聊天流程。迁移完成后下一次
@@ -156,11 +124,7 @@ export class ArtifactService {
   }
 
   async findById(artifactId: string, userId: string) {
-    const artifact = await this.prisma.artifact.findFirst({
-      where: { id: artifactId, userId },
-    });
-    if (!artifact) throw new NotFoundException("Artifact not found");
-    return artifact;
+    return this.loadArtifact(artifactId, userId);
   }
 
   async updateArtifact(
@@ -170,45 +134,25 @@ export class ArtifactService {
   ) {
     const artifact = await this.findById(artifactId, userId);
     const nextVersion = artifact.currentVersion + 1;
-    return this.prisma.artifact.update({
-      where: { id: artifactId },
-      data: {
-        content: input.content,
-        currentVersion: nextVersion,
-        versions: {
-          create: {
-            version: nextVersion,
-            content: input.content,
-            changelog: input.changelog?.trim() || "人工编辑报告",
-            sourceTags: ["HUMAN"],
-          },
-        },
-      },
-      include: { versions: true },
+    return this.database.db.transaction(async (transaction) => {
+      const [updated] = await transaction.update(artifacts).set({ content: input.content, currentVersion: nextVersion, updatedAt: new Date() }).where(eq(artifacts.id, artifactId)).returning();
+      await transaction.insert(artifactVersions).values({ id: crypto.randomUUID(), artifactId, version: nextVersion, content: input.content, changelog: input.changelog?.trim() || "人工编辑报告", sourceTags: ["HUMAN"] });
+      return this.withVersions(transaction, updated!);
     });
   }
 
   async updateTitle(artifactId: string, userId: string, title: string) {
     const artifact = await this.findById(artifactId, userId);
-    return this.prisma.$transaction(async (transaction) => {
-      const updated = await transaction.artifact.update({
-        where: { id: artifact.id },
-        data: { title },
-      });
-      await transaction.conversation.update({
-        where: { id: artifact.conversationId },
-        data: { title },
-      });
-      return updated;
+    return this.database.db.transaction(async (transaction) => {
+      const [updated] = await transaction.update(artifacts).set({ title, updatedAt: new Date() }).where(eq(artifacts.id, artifact.id)).returning();
+      await transaction.update(conversations).set({ title, updatedAt: new Date() }).where(eq(conversations.id, artifact.conversationId));
+      return updated!;
     });
   }
 
   async getVersions(artifactId: string, userId: string) {
     await this.findById(artifactId, userId);
-    return this.prisma.artifactVersion.findMany({
-      where: { artifactId },
-      orderBy: { version: "desc" },
-    });
+    return this.database.db.select().from(artifactVersions).where(eq(artifactVersions.artifactId, artifactId)).orderBy(desc(artifactVersions.version));
   }
 
   async revertToVersion(
@@ -217,33 +161,20 @@ export class ArtifactService {
     targetVersion: number,
   ) {
     const artifact = await this.findById(artifactId, userId);
-    const version = await this.prisma.artifactVersion.findUnique({
-      where: { artifactId_version: { artifactId, version: targetVersion } },
-    });
+    const [version] = await this.database.db.select().from(artifactVersions).where(and(eq(artifactVersions.artifactId, artifactId), eq(artifactVersions.version, targetVersion))).limit(1);
     if (!version) throw new NotFoundException("Artifact version not found");
 
     const nextVersion = artifact.currentVersion + 1;
-    return this.prisma.artifact.update({
-      where: { id: artifactId },
-      data: {
-        content: version.content,
-        currentVersion: nextVersion,
-        versions: {
-          create: {
-            version: nextVersion,
-            content: version.content,
-            changelog: `恢复到版本 ${targetVersion}`,
-            sourceTags: ["HUMAN", "REVERT"],
-          },
-        },
-      },
-      include: { versions: true },
+    return this.database.db.transaction(async (transaction) => {
+      const [updated] = await transaction.update(artifacts).set({ content: version.content, currentVersion: nextVersion, updatedAt: new Date() }).where(eq(artifacts.id, artifactId)).returning();
+      await transaction.insert(artifactVersions).values({ id: crypto.randomUUID(), artifactId, version: nextVersion, content: version.content, changelog: `恢复到版本 ${targetVersion}`, sourceTags: ["HUMAN", "REVERT"] });
+      return this.withVersions(transaction, updated!);
     });
   }
 
   async deleteArtifact(artifactId: string, userId: string): Promise<void> {
     await this.findById(artifactId, userId);
-    await this.prisma.artifact.delete({ where: { id: artifactId } });
+    await this.database.db.delete(artifacts).where(eq(artifacts.id, artifactId));
   }
 
   /**
@@ -300,10 +231,7 @@ export class ArtifactService {
   }
 
   private async assertConversationOwner(conversationId: string, userId: string) {
-    const conversation = await this.prisma.conversation.findFirst({
-      where: { id: conversationId, userId },
-      select: { id: true },
-    });
+    const [conversation] = await this.database.db.select({ id: conversations.id }).from(conversations).where(and(eq(conversations.id, conversationId), eq(conversations.userId, userId))).limit(1);
     if (!conversation) throw new NotFoundException("Conversation not found");
     return conversation;
   }

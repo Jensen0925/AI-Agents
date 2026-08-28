@@ -3,7 +3,9 @@ import {
   Injectable,
   Logger,
 } from "@nestjs/common";
-import { PrismaService } from "../prisma/prisma.service";
+import { eq, sql } from "drizzle-orm";
+import { DatabaseService } from "../database/database.service";
+import { documentChunks, documents } from "../database/schema";
 import { loadLangchainConfig } from "../config/load-langchain-config";
 import { DocumentEmbeddingService } from "./embedding.service";
 import {
@@ -38,7 +40,7 @@ export class SearchService {
   private readonly logger = new Logger(SearchService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly database: DatabaseService,
     private readonly embeddingService: DocumentEmbeddingService,
   ) {}
 
@@ -64,19 +66,14 @@ export class SearchService {
     try {
       // 没有可检索的文档时直接返回，避免首次聊天为了一个空结果下载本地
       // Xenova 模型。这样新账号可以先正常聊天，上传并处理文档后再启用检索。
-      // 某些轻量测试替身只提供 $queryRaw；真实 Prisma 客户端始终有
-      // document.findFirst，因此缺少该探测能力时直接执行兼容查询。
-      if (typeof this.prisma.document?.findFirst === "function") {
-        const documentWithChunks = await this.prisma.document.findFirst({
-          where: {
-            userId,
-            chunks: { some: {} },
-          },
-          select: { id: true },
-        });
-        if (!documentWithChunks) {
-          return [];
-        }
+      const [documentWithChunks] = await this.database.db
+        .select({ id: documents.id })
+        .from(documents)
+        .innerJoin(documentChunks, eq(documentChunks.documentId, documents.id))
+        .where(eq(documents.userId, userId))
+        .limit(1);
+      if (!documentWithChunks) {
+        return [];
       }
 
       const [queryVector] = await this.embeddingService.embedTexts([
@@ -87,7 +84,8 @@ export class SearchService {
       }
 
       const vectorLiteral = `[${queryVector.join(",")}]`;
-      const rows = await this.prisma.$queryRaw<RawSimilarityResult[]>`
+      const rows = (await this.database.db.execute(
+        sql<RawSimilarityResult>`
         SELECT
           chunks."id",
           chunks."documentId" AS "documentId",
@@ -100,12 +98,13 @@ export class SearchService {
         WHERE documents."userId" = ${userId}
         ORDER BY chunks."embedding" <=> ${vectorLiteral}::vector
         LIMIT ${limit}
-      `;
+      `,
+      )) as unknown as RawSimilarityResult[];
 
       const { minScore } = loadLangchainConfig().retrieval;
 
       return rows
-        .map((row) => ({
+        .map((row: RawSimilarityResult) => ({
           ...(typeof row.id === "string" ? { id: row.id } : {}),
           content: row.content,
           score: Number(row.score),
@@ -193,7 +192,8 @@ export class SearchService {
   }
 
   private async fetchUserChunks(userId: string): Promise<RetrievalResult[]> {
-    const rows = await this.prisma.$queryRaw<RawSimilarityResult[]>`
+    const rows = (await this.database.db.execute(
+      sql<RawSimilarityResult>`
       SELECT
         chunks."id",
         chunks."documentId" AS "documentId",
@@ -205,9 +205,10 @@ export class SearchService {
         ON documents."id" = chunks."documentId"
       WHERE documents."userId" = ${userId}
       LIMIT ${BM25_CORPUS_CAP}
-    `;
+    `,
+    )) as unknown as RawSimilarityResult[];
 
-    return rows.flatMap((row) => {
+    return rows.flatMap((row: RawSimilarityResult) => {
       if (typeof row.id !== "string" || typeof row.documentId !== "string") {
         return [];
       }

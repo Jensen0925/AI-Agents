@@ -2,13 +2,14 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import type { Prisma } from "@prisma/client";
+import { sql } from "drizzle-orm";
 import { SearchService } from "../src/document/search.service";
 import { DocumentEmbeddingService } from "../src/document/embedding.service";
 import { EmbeddingService } from "../src/llm/embedding/embedding.service";
 import { runAnalysisGraph } from "../src/llm/graph/analysis-graph.runner";
 import { createChatModel } from "../src/llm/model.factory";
-import { PrismaService } from "../src/prisma/prisma.service";
+import { DatabaseService } from "../src/database/database.service";
+import { evalRuns, type JsonValue } from "../src/database/schema";
 import {
   addOverallMetrics,
   aggregateEvaluation,
@@ -272,23 +273,21 @@ async function evaluateCase(
 }
 
 async function persistEvalRun(
-  prisma: PrismaService,
+  database: DatabaseService,
   report: EvalReport,
   reportPath: string,
 ): Promise<void> {
   try {
-    await prisma.evalRun.create({
-      data: {
-        gitSha: report.gitSha,
-        model: report.model,
-        startedAt: new Date(report.startedAt),
-        finishedAt: new Date(report.finishedAt),
-        overallMetrics:
-          report.summary.overall.metrics as unknown as Prisma.InputJsonValue,
-        passed: report.gate.passed,
-        reportPath,
-        reportJson: report as unknown as Prisma.InputJsonValue,
-      },
+    await database.db.insert(evalRuns).values({
+      id: crypto.randomUUID(),
+      gitSha: report.gitSha,
+      model: report.model,
+      startedAt: new Date(report.startedAt),
+      finishedAt: new Date(report.finishedAt),
+      overallMetrics: report.summary.overall.metrics as unknown as JsonValue,
+      passed: report.gate.passed,
+      reportPath,
+      reportJson: report as unknown as JsonValue,
     });
   } catch (error) {
     // 报告文件已是可追溯产物；数据库写失败不应丢弃结果或掩盖 gate 的退出码。
@@ -302,9 +301,9 @@ async function persistEvalRun(
  * 评测必须依赖真实检索库。SearchService 在产品对话中可以把检索故障降级为
  * 空上下文，但 runner 不能把“数据库不可达”误报成“检索评测通过”。
  */
-async function assertEvaluationStoreAvailable(prisma: PrismaService): Promise<void> {
+async function assertEvaluationStoreAvailable(database: DatabaseService): Promise<void> {
   try {
-    await prisma.$queryRaw`SELECT 1`;
+    await database.db.execute(sql`SELECT 1`);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -327,13 +326,13 @@ async function run(): Promise<boolean> {
   }
 
   const startedAt = new Date();
-  const prisma = new PrismaService();
-  await prisma.$connect();
+  const database = new DatabaseService();
+  await database.connect();
   try {
-    await assertEvaluationStoreAvailable(prisma);
+    await assertEvaluationStoreAvailable(database);
     const embeddingService = new EmbeddingService({});
     const searchService = new SearchService(
-      prisma,
+      database,
       new DocumentEmbeddingService(embeddingService),
     );
     const model = options.noLlm ? undefined : createChatModel();
@@ -404,7 +403,7 @@ async function run(): Promise<boolean> {
     const csvPath = join(REPORTS_DIR, `${timestamp}.csv`);
     writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`);
     writeFileSync(csvPath, `${toCsv(details)}\n`);
-    await persistEvalRun(prisma, report, jsonPath);
+    await persistEvalRun(database, report, jsonPath);
 
     printBucket("[eval] overall", summary.overall);
     for (const [tag, bucket] of Object.entries(summary.byTag)) {
@@ -420,7 +419,7 @@ async function run(): Promise<boolean> {
     }
     return gate.passed;
   } finally {
-    await prisma.$disconnect();
+    await database.disconnect();
   }
 }
 

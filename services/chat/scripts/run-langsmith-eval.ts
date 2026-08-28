@@ -4,12 +4,12 @@ import { join, resolve } from "node:path";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { Client } from "langsmith";
 import { evaluate } from "langsmith/evaluation";
+import { DatabaseService } from "../src/database/database.service";
 import { SearchService } from "../src/document/search.service";
 import { DocumentEmbeddingService } from "../src/document/embedding.service";
 import { EmbeddingService } from "../src/llm/embedding/embedding.service";
 import { runAnalysisGraph } from "../src/llm/graph/analysis-graph.runner";
 import { createChatModel } from "../src/llm/model.factory";
-import { PrismaService } from "../src/prisma/prisma.service";
 import type {
   ExpectedIntent,
   RequirementAnalysisEvalCase,
@@ -149,16 +149,16 @@ async function run(): Promise<void> {
   const client = new Client({ apiKey: config.apiKey });
   if (!(await client.hasDataset({ datasetName: DATASET_NAME }))) {
     throw new Error(
-      `LangSmith Dataset ${DATASET_NAME} 不存在。请先执行 bun run scripts/sync-langsmith-dataset.ts。`,
+      `LangSmith Dataset ${DATASET_NAME} 不存在。请先执行 pnpm exec tsx scripts/sync-langsmith-dataset.ts。`,
     );
   }
 
-  const prisma = new PrismaService();
-  await prisma.$connect();
+  const database = new DatabaseService();
+  await database.connect();
   try {
     const model = createChatModel({ modelName: config.modelName });
     const searchService = new SearchService(
-      prisma,
+      database,
       new DocumentEmbeddingService(new EmbeddingService({})),
     );
 
@@ -279,7 +279,7 @@ async function run(): Promise<void> {
     console.log(`[langsmith] completed cases: ${results.length}`);
     if (experimentUrl) console.log(`[langsmith] url: ${experimentUrl}`);
   } finally {
-    await prisma.$disconnect();
+    await database.disconnect();
   }
 }
 

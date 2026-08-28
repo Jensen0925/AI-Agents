@@ -2,7 +2,7 @@ import { Module } from "@nestjs/common";
 import { ArtifactController } from "./artifact.controller";
 import { ArtifactService } from "./artifact.service";
 
-/** PrismaService 由全局 PrismaModule 提供，避免和 ConversationModule 形成循环依赖。 */
+/** DatabaseService 由全局 DatabaseModule 提供。 */
 @Module({
   controllers: [ArtifactController],
   providers: [ArtifactService],

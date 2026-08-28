@@ -11,7 +11,7 @@ import {
   Req,
   UseGuards,
 } from "@nestjs/common";
-import { MessageRole, type Prisma } from "@prisma/client";
+import { MessageRole, type JsonValue } from "../database/schema";
 import {
   type AuthenticatedRequest,
   JwtAuthGuard,
@@ -88,8 +88,8 @@ function uiResponseText(response: AIUIResponse): string {
   return text || "请根据下方内容继续操作。";
 }
 
-function toJson(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+function toJson(value: unknown): JsonValue {
+  return JSON.parse(JSON.stringify(value)) as JsonValue;
 }
 
 function flowContextFromMetadata(metadata: unknown): unknown {

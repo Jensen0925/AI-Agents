@@ -1,4 +1,4 @@
-import type { Document } from "@prisma/client";
+import { and, desc, eq } from "drizzle-orm";
 import {
   BadRequestException,
   ConflictException,
@@ -10,7 +10,8 @@ import {
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { PrismaService } from "../prisma/prisma.service";
+import { DatabaseService } from "../database/database.service";
+import { documents, type Document } from "../database/schema";
 import { ChunkService } from "./chunk.service";
 
 export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024;
@@ -104,7 +105,7 @@ export class DocumentService {
   );
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly database: DatabaseService,
     private readonly chunkService: ChunkService,
   ) {}
 
@@ -136,14 +137,18 @@ export class DocumentService {
       safeUserId,
       `${Date.now()}-${safeFilename}`,
     );
-    const storedPath = relative(this.serviceRoot, absolutePath);
+    const storedPath = this.uploadRoot.startsWith(`${this.serviceRoot}${sep}`)
+      ? relative(this.serviceRoot, absolutePath)
+      : absolutePath;
 
     await mkdir(userDirectory, { recursive: true });
     await writeFile(absolutePath, file.buffer, { flag: "wx" });
 
     try {
-      return await this.prisma.document.create({
-        data: {
+      const [document] = await this.database.db
+        .insert(documents)
+        .values({
+          id: crypto.randomUUID(),
           userId,
           filename: safeFilename,
           mimeType: file.mimetype,
@@ -152,8 +157,9 @@ export class DocumentService {
           storageType: "local",
           category: documentCategory,
           status: "pending",
-        },
-      });
+        })
+        .returning();
+      return document!;
     } catch (error) {
       await unlink(absolutePath).catch(() => undefined);
       throw error;
@@ -161,11 +167,12 @@ export class DocumentService {
   }
 
   /** 按创建时间倒序返回指定用户的文档列表。 */
-  findByUser(userId: string): Promise<Document[]> {
-    return this.prisma.document.findMany({
-      where: { userId },
-      orderBy: { createdAt: "desc" },
-    });
+  async findByUser(userId: string): Promise<Document[]> {
+    return this.database.db
+      .select()
+      .from(documents)
+      .where(eq(documents.userId, userId))
+      .orderBy(desc(documents.createdAt));
   }
 
   /** 更新文档分类，分类修改不需要重新解析已有向量。 */
@@ -180,20 +187,21 @@ export class DocumentService {
     }
 
     await this.findById(documentId, userId);
-    return this.prisma.document.update({
-      where: { id: documentId },
-      data: { category: normalizedCategory },
-    });
+    const [document] = await this.database.db
+      .update(documents)
+      .set({ category: normalizedCategory })
+      .where(eq(documents.id, documentId))
+      .returning();
+    return document!;
   }
 
   /** 按文档 ID 与用户 ID 联合查询，未找到或无权限统一返回 404。 */
   async findById(documentId: string, userId: string): Promise<Document> {
-    const document = await this.prisma.document.findFirst({
-      where: {
-        id: documentId,
-        userId,
-      },
-    });
+    const [document] = await this.database.db
+      .select()
+      .from(documents)
+      .where(and(eq(documents.id, documentId), eq(documents.userId, userId)))
+      .limit(1);
 
     // 未找到和无权限保持相同响应，避免泄露其他用户的文档 ID。
     if (!document) {
@@ -247,7 +255,11 @@ export class DocumentService {
       );
     }
 
-    return this.prisma.document.delete({ where: { id: documentId } });
+    const [deleted] = await this.database.db
+      .delete(documents)
+      .where(eq(documents.id, documentId))
+      .returning();
+    return deleted!;
   }
 
   /**
@@ -266,10 +278,10 @@ export class DocumentService {
       throw new BadRequestException("Document has no local file");
     }
 
-    await this.prisma.document.update({
-      where: { id: document.id },
-      data: { status: "processing", chunkCount: 0 },
-    });
+    await this.database.db
+      .update(documents)
+      .set({ status: "processing", chunkCount: 0 })
+      .where(eq(documents.id, document.id));
 
     // 将耗时的解析与本地模型推理移出请求生命周期，接口可立即返回 202。
     setImmediate(() => {
@@ -321,7 +333,9 @@ export class DocumentService {
   private resolveStoredPath(filePath: string): string {
     const absolutePath = isAbsolute(filePath)
       ? resolve(filePath)
-      : resolve(this.serviceRoot, filePath);
+      : filePath === "uploads" || filePath.startsWith(`uploads${sep}`)
+        ? resolve(this.uploadRoot, filePath === "uploads" ? "" : filePath.slice(`uploads${sep}`.length))
+        : resolve(this.serviceRoot, filePath);
     if (
       absolutePath !== this.uploadRoot &&
       !absolutePath.startsWith(`${this.uploadRoot}${sep}`)

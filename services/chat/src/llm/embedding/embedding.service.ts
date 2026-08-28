@@ -5,9 +5,9 @@ import {
 } from "@xenova/transformers";
 import { Embeddings } from "@langchain/core/embeddings";
 import { Injectable } from "@nestjs/common";
+import { LOCAL_EMBEDDING_MODEL } from "./model";
 
-export const LOCAL_EMBEDDING_MODEL =
-  "Xenova/paraphrase-multilingual-MiniLM-L12-v2";
+export { DEFAULT_EMBEDDING_MODEL, LOCAL_EMBEDDING_MODEL } from "./model";
 
 const remoteHost =
   process.env.TRANSFORMERS_REMOTE_HOST ??
