@@ -6,5 +6,6 @@ dist
 .env
 .env.local
 .DS_Store
+.workbuddy/
 services/chat/uploads/
 services/chat/eval/reports/
