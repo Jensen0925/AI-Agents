@@ -8,6 +8,17 @@ import {
 } from "./schema";
 import { hashPassword } from "../auth/password";
 
+// tsx 不会自动加载 .env（drizzle-kit 会），而本脚本直接以 tsx 运行，
+// 因此在此显式加载项目根目录的 .env，确保 DATABASE_URL 等变量可用。
+// 使用 Node 22 内置 API，无需额外依赖；不会覆盖已存在的真实环境变量。
+if (typeof process.loadEnvFile === "function") {
+  try {
+    process.loadEnvFile(".env");
+  } catch {
+    // 缺少 .env 时忽略，交由下方 DATABASE_URL 校验给出明确报错
+  }
+}
+
 export const PERMISSION_DEFINITIONS = [
   { code: "dashboard:read", name: "查看工作台", module: "工作台" },
   { code: "users:read", name: "查看用户", module: "用户管理" },
