@@ -19,7 +19,7 @@ const directPatterns: Array<{ id: string; pattern: RegExp }> = [
 
 const indirectPatterns: Array<{ id: string; pattern: RegExp }> = [
   { id: "html-hidden-injection", pattern: /<!--[\s\S]*?(ignore|忽略|disregard|read|send|forward|发送|读取|转发)[\s\S]*?-->/i },
-  { id: "invisible-unicode", pattern: /[\u200B\u200C\u200D\uFEFF\u2060]{3,}/ },
+  { id: "invisible-unicode", pattern: /[\u200B-\u200D\uFEFF\u2060]{3,}/ },
   { id: "markdown-hidden-instruction", pattern: /\[.*?\]\(.*?(ignore|忽略|system|read|credentials|password|secret).*?\)/i },
   { id: "base64-embedded-instruction", pattern: /(?:eval|execute|run|exec)\s*\(\s*(?:atob|Buffer\.from)\s*\(/i },
 ];
