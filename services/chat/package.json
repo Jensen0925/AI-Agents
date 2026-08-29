@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
-    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').writeFileSync('dist/package.json', '{\\\"type\\\":\\\"commonjs\\\"}\\n')\"",
+    "dev": "node scripts/prepare-dist.mjs && nest start --watch",
+    "build": "tsc -p tsconfig.build.json && node scripts/prepare-dist.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:deploy": "drizzle-kit migrate",
