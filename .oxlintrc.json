@@ -1,0 +1,39 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "env": {
+    "es2022": true,
+    "node": true,
+    "browser": true
+  },
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn",
+    "perf": "warn"
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.next/**",
+    "**/.turbo/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/*.config.{js,ts,mjs,cjs}",
+    "**/uploads/**",
+    "**/eval/**",
+    "**/drizzle/**",
+    "**/next-env.d.ts"
+  ],
+  "rules": {
+    "no-explicit-any": "off",
+    "no-empty-interface": "warn",
+    "no-unused-vars": "warn"
+  },
+  "overrides": [
+    {
+      "files": ["**/test/**", "**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx", "**/*.spec.tsx"],
+      "rules": {
+        "unicorn/no-thenable": "off"
+      }
+    }
+  ]
+}

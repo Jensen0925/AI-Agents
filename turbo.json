@@ -13,6 +13,10 @@
       "dependsOn": ["^typecheck"],
       "outputs": []
     },
+    "lint": {
+      "cache": true,
+      "outputs": []
+    },
     "test": {
       "dependsOn": ["^test"],
       "outputs": []

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "pnpm exec tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.2",

@@ -13,7 +13,8 @@
     "start": "node dist/main.js",
     "test": "vitest run",
     "test:graph": "tsx test-graph.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint"
   },
   "dependencies": {
     "@cloudsage/contracts": "workspace:*",
