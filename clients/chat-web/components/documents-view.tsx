@@ -203,7 +203,7 @@ export function DocumentsView({
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-8 py-6">
+      <div className="pretty-scroll flex-1 overflow-y-auto px-8 py-6">
         {error && (
           <div className="mb-4 rounded-xl border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             {error}
@@ -347,10 +347,10 @@ function DocCard(props: DocumentActions) {
           props.onPreview(document)
         }
       }}
-      className="group flex cursor-pointer flex-col rounded-2xl border border-border bg-card p-5 transition-all hover:border-ring/40 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="group flex cursor-pointer flex-col rounded-2xl border border-border bg-card p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-ring/40 hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring/50"
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="flex size-10 items-center justify-center rounded-xl bg-accent text-accent-foreground">
+        <div className="flex size-10 items-center justify-center rounded-xl bg-accent text-accent-foreground transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
           {typeIcon[document.type]}
         </div>
         <div className="flex items-center gap-2">
@@ -399,7 +399,7 @@ function DocRow(props: DocumentActions) {
           props.onPreview(document)
         }
       }}
-      className="group flex cursor-pointer items-center gap-4 rounded-xl border border-border bg-card px-4 py-3 transition-all hover:border-ring/40 hover:shadow-sm focus-visible:ring-2 focus-visible:ring-ring/50"
+      className="group flex cursor-pointer items-center gap-4 rounded-xl border border-border bg-card px-4 py-3 shadow-sm transition-all hover:border-ring/40 hover:shadow-md focus-visible:ring-2 focus-visible:ring-ring/50"
     >
       <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground">
         {typeIcon[document.type]}

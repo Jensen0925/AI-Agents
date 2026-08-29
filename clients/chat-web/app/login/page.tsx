@@ -62,17 +62,26 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-screen w-full bg-background">
       {/* 左侧品牌区 */}
-      <section className="relative hidden w-1/2 flex-col justify-between bg-sidebar p-12 lg:flex">
-        <div className="flex items-center gap-2.5">
-          <div className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+      <section className="relative hidden w-1/2 flex-col justify-between overflow-hidden bg-sidebar p-12 lg:flex">
+        {/* 装饰光斑，营造层次感 */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -right-24 -top-24 size-96 rounded-full bg-primary/15 blur-3xl"
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-32 -left-16 size-80 rounded-full bg-chart-2/15 blur-3xl"
+        />
+        <div className="relative flex items-center gap-2.5">
+          <div className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-md shadow-primary/20">
             <CloudLightning className="size-5" />
           </div>
           <span className="text-base font-semibold text-sidebar-foreground">CloudSage</span>
         </div>
 
-        <div className="flex max-w-md flex-col gap-8">
+        <div className="relative flex max-w-md flex-col gap-8">
           <div className="flex flex-col gap-3">
-            <h1 className="text-balance text-3xl font-semibold leading-snug text-foreground">
+            <h1 className="text-balance text-3xl font-semibold leading-snug tracking-tight text-foreground">
               让团队知识流动起来，用 AI 即时获取答案
             </h1>
             <p className="text-pretty text-sm leading-relaxed text-muted-foreground">
@@ -83,7 +92,7 @@ export default function LoginPage() {
           <div className="flex flex-col gap-4">
             {highlights.map((item) => (
               <div key={item.title} className="flex items-start gap-3">
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground">
+                <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-primary shadow-sm">
                   <item.icon className="size-4.5" />
                 </div>
                 <div className="flex flex-col">
@@ -95,7 +104,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <p className="text-xs text-muted-foreground">© 2026 CloudSage. 保留所有权利。</p>
+        <p className="relative text-xs text-muted-foreground">© 2026 CloudSage. 保留所有权利。</p>
       </section>
 
       {/* 右侧登录表单 */}

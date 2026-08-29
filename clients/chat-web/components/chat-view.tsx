@@ -402,8 +402,8 @@ export function ChatView({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-border px-8 py-4">
-        <div className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+      <header className="flex items-center gap-3 border-b border-border bg-background/80 px-8 py-4 backdrop-blur-sm">
+        <div className="flex size-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-md shadow-primary/20">
           <Sparkles className="size-5" />
         </div>
         <div className="min-w-0">
@@ -425,7 +425,7 @@ export function ChatView({
         )}
       </header>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="pretty-scroll flex-1 overflow-y-auto">
         {loading ? (
           <ConversationLoading />
         ) : (
@@ -434,12 +434,18 @@ export function ChatView({
               <MessageBubble key={message.id} message={message} onAction={handleUiAction} />
             ))}
             {!hasMessages && !thinking && (
-              <div className="flex min-h-[min(58vh,520px)] flex-col items-center justify-center gap-5 py-10 text-center">
-                <div className="flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                  <Sparkles className="size-7" />
+              <div className="flex min-h-[min(58vh,520px)] flex-col items-center justify-center gap-6 py-10 text-center">
+                <div className="relative">
+                  <div
+                    aria-hidden="true"
+                    className="absolute -inset-5 rounded-full bg-primary/15 blur-2xl animate-[glow-pulse_4s_ease-in-out_infinite]"
+                  />
+                  <div className="relative flex size-16 items-center justify-center rounded-3xl bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-lg shadow-primary/25">
+                    <Sparkles className="size-8" />
+                  </div>
                 </div>
                 <div>
-                  <p className="text-lg font-semibold text-foreground">今天想分析什么需求？</p>
+                  <p className="text-xl font-semibold tracking-tight text-foreground">今天想分析什么需求？</p>
                   <p className="mt-2 max-w-lg text-sm leading-relaxed text-muted-foreground">
                     我会结合会话历史与团队知识库，完成需求澄清、功能拆解、风险识别和报告汇总。
                   </p>
@@ -450,7 +456,7 @@ export function ChatView({
                       key={question}
                       type="button"
                       onClick={() => void send(question)}
-                      className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-ring/40 hover:text-foreground"
+                      className="rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-muted-foreground shadow-sm transition-all hover:-translate-y-0.5 hover:border-ring/40 hover:text-foreground hover:shadow"
                     >
                       {question}
                     </button>
@@ -466,16 +472,22 @@ export function ChatView({
 
       <div className="border-t border-border bg-background px-6 py-4">
         <div className="mx-auto w-full max-w-3xl">
-          <div className="flex items-end gap-2 rounded-2xl border border-input bg-card p-2 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20">
+          <div className="flex items-end gap-2 rounded-2xl border border-input bg-card p-2 shadow-sm transition-shadow focus-within:border-ring focus-within:shadow-md focus-within:ring-3 focus-within:ring-ring/20">
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
               rows={1}
               placeholder="向知识库提问，例如：新员工的入职流程是什么？"
-              className="max-h-40 min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              className="pretty-scroll max-h-40 min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
-            <Button size="icon" onClick={() => void send(input)} disabled={!input.trim() || thinking || loading} aria-label="发送">
+            <Button
+              size="icon"
+              className="rounded-xl shadow-sm shadow-primary/25 transition-transform active:scale-95"
+              onClick={() => void send(input)}
+              disabled={!input.trim() || thinking || loading}
+              aria-label="发送"
+            >
               {thinking ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
             </Button>
           </div>
@@ -511,12 +523,14 @@ function MessageBubble({
 }) {
   const isUser = message.role === "user"
   return (
-    <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
-      <div className={cn("flex size-8 shrink-0 items-center justify-center rounded-full", isUser ? "bg-secondary text-secondary-foreground" : "bg-primary text-primary-foreground")}>
+    <div
+      className={cn("flex gap-3 animate-[message-in_0.3s_ease_both]", isUser && "flex-row-reverse")}
+    >
+      <div className={cn("flex size-8 shrink-0 items-center justify-center rounded-full shadow-sm", isUser ? "bg-secondary text-secondary-foreground" : "bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-primary/20")}>
         {isUser ? <User className="size-4" /> : <Sparkles className="size-4" />}
       </div>
       <div className={cn("flex max-w-[85%] flex-col gap-2", isUser && "items-end")}>
-        <div className={cn("whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed", isUser ? "bg-primary text-primary-foreground" : "border border-border bg-card text-foreground")}>
+        <div className={cn("whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed", isUser ? "rounded-br-md bg-gradient-to-br from-primary to-primary/85 text-primary-foreground shadow-sm shadow-primary/20" : "rounded-bl-md border border-border bg-card text-foreground shadow-sm")}>
           {message.content}
         </div>
         {!isUser && message.components && message.components.length > 0 && (
@@ -554,11 +568,11 @@ function MessageBubble({
 
 function ThinkingBubble() {
   return (
-    <div className="flex gap-3">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
+    <div className="flex gap-3 animate-[message-in_0.3s_ease_both]">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-sm shadow-primary/20">
         <Sparkles className="size-4" />
       </div>
-      <div className="flex items-center gap-1.5 rounded-2xl border border-border bg-card px-4 py-3.5">
+      <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-md border border-border bg-card px-4 py-3.5 shadow-sm">
         <span className="size-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
         <span className="size-2 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
         <span className="size-2 animate-bounce rounded-full bg-muted-foreground" />
