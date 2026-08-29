@@ -8,6 +8,7 @@ import {
   type MCPManagerOptions,
 } from '../../mcp/mcp-manager';
 import { MCPClientService, type MCPClientConfig } from '../../mcp/mcp-client.service';
+import { createReactAgent } from '@langchain/langgraph/prebuilt';
 
 type ReactAgent = {
   invoke(input: { messages: Array<{ role: string; content: string }> }): Promise<unknown>;
@@ -18,10 +19,7 @@ type CreateReactAgent = (input: {
   prompt: string;
 }) => ReactAgent;
 
-// chat 服务仍使用 CommonJS 编译，require 可规避 LangGraph prebuilt 的条件导出类型问题。
-const { createReactAgent } = require('@langchain/langgraph/prebuilt') as {
-  createReactAgent: CreateReactAgent;
-};
+// createReactAgent 来自 @langchain/langgraph/prebuilt 的具名导出，静态导入在 ESM(tsx) 与 CJS(nest build) 下均可用。
 
 /** 本地基础工具：MCP 离线或工具故障时，Agent 仍能完成最小分析闭环。 */
 export const readRequirementTool = tool(
@@ -95,7 +93,10 @@ export async function createMcpFunctionalExpert(
     ...mcpTools,
   ];
   const llm = options.llm ?? createChatModel({ tier: 'medium' });
-  const agent = (options.createAgent ?? createReactAgent)({
+  // createReactAgent 带完整的 LangGraph 泛型签名；这里统一收敛为本模块的可替换 seam 类型，
+  // 便于测试注入 options.createAgent，也避免把内部泛型泄漏进业务签名。
+  const buildAgent = (options.createAgent ?? createReactAgent) as CreateReactAgent;
+  const agent = buildAgent({
     llm,
     tools: mergedTools,
     prompt: FUNCTIONAL_MCP_AGENT_PROMPT,
