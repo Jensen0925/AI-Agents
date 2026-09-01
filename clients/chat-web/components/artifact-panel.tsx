@@ -5,6 +5,7 @@ import { FileText, History, Loader2, Pencil, RotateCcw, Save, Sparkles } from "l
 import { api, apiErrorMessage } from "@/lib/api"
 import { getSession } from "@/lib/auth"
 import { Button } from "@/components/ui/button"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import {
   Drawer,
   DrawerContent,
@@ -64,6 +65,8 @@ export function ArtifactPanel({
   const [optimizing, setOptimizing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
+  // 待确认回滚的版本：恢复操作会新增一个版本，因此先确认再执行。
+  const [versionToRevert, setVersionToRevert] = useState<ArtifactVersion | null>(null)
 
   const dirty = Boolean(artifact && (content !== artifact.content || title.trim() !== artifact.title))
   const sortedVersions = useMemo(
@@ -158,9 +161,15 @@ export function ArtifactPanel({
     }
   }
 
-  async function revert(version: ArtifactVersion) {
+  function revert(version: ArtifactVersion) {
     if (!artifact || saving) return
-    if (!window.confirm(`恢复到版本 ${version.version}？此操作会创建一个新的版本。`)) return
+    setError("")
+    setVersionToRevert(version)
+  }
+
+  async function confirmRevert() {
+    const version = versionToRevert
+    if (!artifact || !version || saving) return
     setSaving(true)
     setError("")
     try {
@@ -230,128 +239,148 @@ export function ArtifactPanel({
   }
 
   return (
-    <Drawer open={open} onOpenChange={onOpenChange}>
-      <DrawerContent className="max-w-xl border-border bg-background p-0 text-foreground shadow-2xl">
-        <DrawerHeader className="border-border pr-14">
-          <DrawerTitle className="text-foreground">分析报告</DrawerTitle>
-          <DrawerDescription className="text-muted-foreground">
-            保存编辑会创建新版本，历史报告可随时恢复。
-          </DrawerDescription>
-        </DrawerHeader>
+    <>
+      <Drawer open={open} onOpenChange={onOpenChange}>
+          <DrawerContent className="max-w-xl border-border bg-background p-0 text-foreground shadow-2xl">
+          <DrawerHeader className="border-border pr-14">
+            <DrawerTitle className="text-foreground">分析报告</DrawerTitle>
+            <DrawerDescription className="text-muted-foreground">
+              保存编辑会创建新版本，历史报告可随时恢复。
+            </DrawerDescription>
+          </DrawerHeader>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-          {error && <p className="mb-4 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-          {!artifact ? (
-            <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
-              <FileText className="size-7 text-muted-foreground" />
-              <p className="text-sm font-medium">当前会话还没有分析报告</p>
-              <p className="max-w-sm text-sm text-muted-foreground">完成一次需求分析后，报告会自动出现在这里。</p>
-            </div>
-          ) : (
-            <div className="space-y-5">
-              <div className="flex items-center justify-between gap-3 border-b border-border pb-4">
-                <div className="min-w-0">
-                  {editing ? (
-                    <input
-                      value={title}
-                      onChange={(event) => setTitle(event.target.value)}
-                      className="w-full border-b border-input bg-transparent py-1 text-sm font-semibold outline-none focus:border-ring"
-                      aria-label="报告标题"
-                    />
-                  ) : (
-                    <p className="truncate text-sm font-semibold">{artifact.title}</p>
-                  )}
-                  <p className="mt-1 text-xs text-muted-foreground">当前版本 v{artifact.currentVersion}</p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    onClick={() => setEditing((current) => !current)}
-                    disabled={optimizing}
-                    aria-label={editing ? "查看报告" : "编辑报告"}
-                    title={editing ? "查看报告" : "编辑报告"}
-                  >
-                    <Pencil className="size-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setVersionsOpen((current) => !current)
-                      if (!versionsOpen) void loadVersions()
-                    }}
-                    aria-label="查看版本历史"
-                    title="版本历史"
-                  >
-                    <History className="size-4" />
-                  </Button>
-                </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+            {error && <p className="mb-4 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+            {!artifact ? (
+              <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
+                <FileText className="size-7 text-muted-foreground" />
+                <p className="text-sm font-medium">当前会话还没有分析报告</p>
+                <p className="max-w-sm text-sm text-muted-foreground">完成一次需求分析后，报告会自动出现在这里。</p>
               </div>
-
-              {versionsOpen && (
-                <div className="space-y-2 border-b border-border pb-4">
-                  <p className="text-xs font-medium text-muted-foreground">版本历史</p>
-                  {sortedVersions.map((version) => (
-                    <div key={version.id} className="flex items-center justify-between gap-3 border border-border px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium">v{version.version}{version.version === artifact.currentVersion ? "（当前）" : ""}</p>
-                        <p className="truncate text-xs text-muted-foreground">{version.changelog || version.sourceTags.join(" / ")}</p>
-                      </div>
-                      {version.version !== artifact.currentVersion && (
-                        <Button type="button" size="sm" variant="outline" onClick={() => void revert(version)} disabled={saving || optimizing}>
-                          <RotateCcw className="size-3.5" />恢复
-                        </Button>
-                      )}
-                    </div>
-                  ))}
+            ) : (
+              <div className="space-y-5">
+                <div className="flex items-center justify-between gap-3 border-b border-border pb-4">
+                  <div className="min-w-0">
+                    {editing ? (
+                      <input
+                        value={title}
+                        onChange={(event) => setTitle(event.target.value)}
+                        className="w-full border-b border-input bg-transparent py-1 text-sm font-semibold outline-none focus:border-ring"
+                        aria-label="报告标题"
+                      />
+                    ) : (
+                      <p className="truncate text-sm font-semibold">{artifact.title}</p>
+                    )}
+                    <p className="mt-1 text-xs text-muted-foreground">当前版本 v{artifact.currentVersion}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      onClick={() => setEditing((current) => !current)}
+                      disabled={optimizing}
+                      aria-label={editing ? "查看报告" : "编辑报告"}
+                      title={editing ? "查看报告" : "编辑报告"}
+                    >
+                      <Pencil className="size-4" />
+                    </Button>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setVersionsOpen((current) => !current)
+                        if (!versionsOpen) void loadVersions()
+                      }}
+                      aria-label="查看版本历史"
+                      title="版本历史"
+                    >
+                      <History className="size-4" />
+                    </Button>
+                  </div>
                 </div>
-              )}
 
-              {editing ? (
-                <Textarea
-                  value={content}
-                  onChange={(event) => setContent(event.target.value)}
-                  rows={22}
-                  className="min-h-[420px] border-border bg-card font-mono leading-6 text-foreground focus:border-ring focus:ring-ring/20"
-                  aria-label="报告内容"
-                  disabled={optimizing}
-                />
-              ) : (
-                <pre className="whitespace-pre-wrap break-words border border-border bg-card p-4 font-sans text-sm leading-7 text-foreground">{content}</pre>
-              )}
+                {versionsOpen && (
+                  <div className="space-y-2 border-b border-border pb-4">
+                    <p className="text-xs font-medium text-muted-foreground">版本历史</p>
+                    {sortedVersions.map((version) => (
+                      <div key={version.id} className="flex items-center justify-between gap-3 border border-border px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">v{version.version}{version.version === artifact.currentVersion ? "（当前）" : ""}</p>
+                          <p className="truncate text-xs text-muted-foreground">{version.changelog || version.sourceTags.join(" / ")}</p>
+                        </div>
+                        {version.version !== artifact.currentVersion && (
+                          <Button type="button" size="sm" variant="outline" onClick={() => void revert(version)} disabled={saving || optimizing}>
+                            <RotateCcw className="size-3.5" />恢复
+                          </Button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
 
-              <div className="border-t border-border pt-4">
-                <label htmlFor="artifact-optimize-instruction" className="text-sm font-medium">AI 优化</label>
-                <div className="mt-2 flex gap-2">
-                  <input
-                    id="artifact-optimize-instruction"
-                    value={instruction}
-                    onChange={(event) => setInstruction(event.target.value)}
-                    placeholder="例如：补充验收标准和风险缓解措施"
-                    className="h-9 min-w-0 flex-1 border border-input bg-card px-3 text-sm outline-none placeholder:text-muted-foreground focus:border-ring"
+                {editing ? (
+                  <Textarea
+                    value={content}
+                    onChange={(event) => setContent(event.target.value)}
+                    rows={22}
+                    className="min-h-[420px] border-border bg-card font-mono leading-6 text-foreground focus:border-ring focus:ring-ring/20"
+                    aria-label="报告内容"
                     disabled={optimizing}
                   />
-                  <Button type="button" size="sm" variant="outline" onClick={() => void optimize()} disabled={!instruction.trim() || optimizing}>
-                    {optimizing ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}优化
-                  </Button>
+                ) : (
+                  <pre className="whitespace-pre-wrap break-words border border-border bg-card p-4 font-sans text-sm leading-7 text-foreground">{content}</pre>
+                )}
+
+                <div className="border-t border-border pt-4">
+                  <label htmlFor="artifact-optimize-instruction" className="text-sm font-medium">AI 优化</label>
+                  <div className="mt-2 flex gap-2">
+                    <input
+                      id="artifact-optimize-instruction"
+                      value={instruction}
+                      onChange={(event) => setInstruction(event.target.value)}
+                      placeholder="例如：补充验收标准和风险缓解措施"
+                      className="h-9 min-w-0 flex-1 border border-input bg-card px-3 text-sm outline-none placeholder:text-muted-foreground focus:border-ring"
+                      disabled={optimizing}
+                    />
+                    <Button type="button" size="sm" variant="outline" onClick={() => void optimize()} disabled={!instruction.trim() || optimizing}>
+                      {optimizing ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}优化
+                    </Button>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
 
-        {artifact && (
-          <DrawerFooter className="border-border bg-background">
-            {dirty && <span className="mr-auto text-xs text-muted-foreground">有未保存的修改</span>}
-            <Button type="button" onClick={() => void save()} disabled={!dirty || saving || optimizing}>
-              {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}保存版本
-            </Button>
-          </DrawerFooter>
-        )}
-      </DrawerContent>
-    </Drawer>
+          {artifact && (
+            <DrawerFooter className="border-border bg-background">
+              {dirty && <span className="mr-auto text-xs text-muted-foreground">有未保存的修改</span>}
+              <Button type="button" onClick={() => void save()} disabled={!dirty || saving || optimizing}>
+                {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}保存版本
+              </Button>
+            </DrawerFooter>
+          )}
+          </DrawerContent>
+      </Drawer>
+      <ConfirmDialog
+        open={versionToRevert !== null}
+        onOpenChange={(next) => {
+          if (!next && !saving) setVersionToRevert(null)
+        }}
+        title="恢复版本"
+        tone="primary"
+        description={
+          <>
+            确定恢复到版本 {versionToRevert?.version} 吗？
+            <br />
+            当前内容会保留在历史记录中，系统会基于该版本创建一个新的版本。
+          </>
+        }
+        confirmText="恢复"
+        loading={saving}
+        onConfirm={confirmRevert}
+      />
+    </>
   )
 }

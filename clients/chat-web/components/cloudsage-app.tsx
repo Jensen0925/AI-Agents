@@ -30,6 +30,7 @@ import { DocumentsView } from "@/components/documents-view"
 import { DocumentPreviewDialog } from "@/components/document-preview-dialog"
 import { GlobalSearch } from "@/components/global-search"
 import { ChatView } from "@/components/chat-view"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 
 type View = "documents" | "chat"
 
@@ -49,6 +50,9 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
   const [uploading, setUploading] = useState(false)
   const [previewDocument, setPreviewDocument] = useState<KnowledgeDoc | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
+  // 待确认删除的文档：确认框关闭后再真正发请求，失败信息展示在文档列表上方。
+  const [documentToDelete, setDocumentToDelete] = useState<KnowledgeDoc | null>(null)
+  const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null)
   /** 用户自建分类（内置分类不通过接口返回）。 */
   const [customCategories, setCustomCategories] = useState<UserCategory[]>([])
   const [newConversationSignal, setNewConversationSignal] = useState(0)
@@ -265,13 +269,23 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
       setDocumentsError("演示身份不能删除文档，请使用真实账号。")
       return
     }
-    if (!window.confirm(`确认删除文档“${document.title}”？`)) return
+    // 只登记待删除目标，真正的请求等确认框点「删除」后再发出。
+    setDocumentsError("")
+    setDocumentToDelete(document)
+  }
+
+  async function confirmDeleteDocument() {
+    const target = documentToDelete
+    if (!target || deletingDocumentId) return
+    setDeletingDocumentId(target.id)
     try {
-      await api.delete(`/documents/${document.id}`)
-      if (previewDocument?.id === document.id) setPreviewDocument(null)
-      setDocuments((current) => current.filter((item) => item.id !== document.id))
+      await api.delete(`/documents/${target.id}`)
+      if (previewDocument?.id === target.id) setPreviewDocument(null)
+      setDocuments((current) => current.filter((item) => item.id !== target.id))
     } catch (reason) {
       setDocumentsError(apiErrorMessage(reason))
+    } finally {
+      setDeletingDocumentId(null)
     }
   }
 
@@ -415,6 +429,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
             onProcess={processDocument}
             onDelete={deleteDocument}
             onPreview={setPreviewDocument}
+            deletingDocumentId={deletingDocumentId}
             onLoadDemo={demo ? loadDemoDocuments : undefined}
           />
         ) : (
@@ -441,6 +456,23 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
         documents={documents}
         demo={demo}
         onSelectDocument={setPreviewDocument}
+      />
+      <ConfirmDialog
+        open={documentToDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !deletingDocumentId) setDocumentToDelete(null)
+        }}
+        title="删除文档"
+        description={
+          <>
+            确定要删除“{documentToDelete?.title}”吗？
+            <br />
+            文档及其全部向量片段会一并删除，此操作无法撤销。
+          </>
+        }
+        confirmText="删除"
+        loading={deletingDocumentId !== null}
+        onConfirm={confirmDeleteDocument}
       />
     </main>
   )

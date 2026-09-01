@@ -8,10 +8,10 @@ import { MAX_CATEGORY_NAME_LENGTH } from "@/lib/categories"
 import type { Category } from "@/lib/knowledge-data"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { ConfirmDialog } from "@/components/ui/confirm-dialog"
 import { ThemeToggle } from "@/components/theme-toggle"
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu"
 import {
-  AlertTriangle,
   CloudLightning,
   FolderClosed,
   Loader2,
@@ -212,7 +212,7 @@ export function Sidebar({
           <div className="pretty-scroll flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-3">
             {categories.map((cat) => {
               const itemClass = cn(
-                "flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors",
+                "flex items-center justify-between rounded-lg px-3 py-1.5 text-sm transition-colors",
                 view === "documents" && activeCategory === cat.id
                   ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
                   : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60",
@@ -463,7 +463,7 @@ export function Sidebar({
       </div>
       </aside>
 
-      <DialogPrimitive.Root
+      <ConfirmDialog
         open={Boolean(conversationToDelete)}
         onOpenChange={(open) => {
           if (!open && !deletingConversationId) {
@@ -471,74 +471,34 @@ export function Sidebar({
             setConversationError("")
           }
         }}
-      >
-        <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] transition-opacity" />
-          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl outline-none">
-            <div className="p-6">
-              <div className="flex items-start gap-3.5">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
-                  <AlertTriangle className="size-5" />
-                </div>
-                <div className="min-w-0 pt-0.5">
-                  <DialogPrimitive.Title className="text-base font-semibold text-foreground">
-                    删除会话
-                  </DialogPrimitive.Title>
-                  <DialogPrimitive.Description className="mt-1.5 text-sm leading-6 text-muted-foreground">
-                    确定要删除“{conversationToDelete?.title || "新会话"}”吗？
-                    <br />
-                    会话中的消息也会一并删除，此操作无法撤销。
-                  </DialogPrimitive.Description>
-                </div>
-              </div>
-
-              {conversationError && (
-                <p className="mt-4 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive">
-                  {conversationError}
-                </p>
-              )}
-            </div>
-
-            <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/30 px-6 py-4">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={Boolean(deletingConversationId)}
-                onClick={() => setConversationToDelete(null)}
-              >
-                取消
-              </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                size="sm"
-                disabled={Boolean(deletingConversationId) || !conversationToDelete || !onDeleteConversation}
-                onClick={async () => {
-                  if (!conversationToDelete || !onDeleteConversation || deletingConversationId) return
-                  const target = conversationToDelete
-                  setConversationError("")
-                  setDeletingConversationId(target.id)
-                  // 先关闭全屏遮罩，再等待后端删除请求。
-                  // 删除接口或数据库发生延迟时，用户仍然可以操作其他区域；
-                  // 失败信息会显示在左侧会话列表上方，避免页面被 Dialog 锁死。
-                  setConversationToDelete(null)
-                  try {
-                    await onDeleteConversation(target.id)
-                  } catch (reason) {
-                    setConversationError(apiErrorMessage(reason))
-                  } finally {
-                    setDeletingConversationId(null)
-                  }
-                }}
-              >
-                {deletingConversationId ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-                {deletingConversationId ? "删除中…" : "删除会话"}
-              </Button>
-            </div>
-          </DialogPrimitive.Content>
-        </DialogPrimitive.Portal>
-      </DialogPrimitive.Root>
+        title="删除会话"
+        description={
+          <>
+            确定要删除“{conversationToDelete?.title || "新会话"}”吗？
+            <br />
+            会话中的消息也会一并删除，此操作无法撤销。
+          </>
+        }
+        confirmText="删除会话"
+        loading={Boolean(deletingConversationId)}
+        error={conversationError}
+        onConfirm={async () => {
+          const target = conversationToDelete
+          if (!target || !onDeleteConversation || deletingConversationId) return
+          setConversationError("")
+          setDeletingConversationId(target.id)
+          // 确认框此时已关闭，这里只等待后端删除请求。
+          // 删除接口或数据库发生延迟时，用户仍然可以操作其他区域；
+          // 失败信息会显示在左侧会话列表上方，避免页面被 Dialog 锁死。
+          try {
+            await onDeleteConversation(target.id)
+          } catch (reason) {
+            setConversationError(apiErrorMessage(reason))
+          } finally {
+            setDeletingConversationId(null)
+          }
+        }}
+      />
 
       <DialogPrimitive.Root
         open={Boolean(conversationToRename)}
@@ -551,8 +511,8 @@ export function Sidebar({
       >
         <DialogPrimitive.Portal>
           <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] transition-opacity" />
-          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl outline-none">
-            <div className="p-6">
+          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[360px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xl outline-none">
+            <div className="p-5">
               <DialogPrimitive.Title className="text-base font-semibold text-foreground">
                 重命名会话
               </DialogPrimitive.Title>
@@ -579,7 +539,7 @@ export function Sidebar({
                 </p>
               )}
             </div>
-            <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/30 px-6 py-4">
+            <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/30 px-5 py-3">
               <Button
                 type="button"
                 variant="outline"
@@ -614,8 +574,8 @@ export function Sidebar({
       >
         <DialogPrimitive.Portal>
           <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] transition-opacity" />
-          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl outline-none">
-            <div className="p-6">
+          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[360px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-xl border border-border bg-card text-card-foreground shadow-xl outline-none">
+            <div className="p-5">
               <DialogPrimitive.Title className="text-base font-semibold text-foreground">
                 新建分类
               </DialogPrimitive.Title>
@@ -642,7 +602,7 @@ export function Sidebar({
                 </p>
               )}
             </div>
-            <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/30 px-6 py-4">
+            <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/30 px-5 py-3">
               <Button
                 type="button"
                 variant="outline"
@@ -666,7 +626,7 @@ export function Sidebar({
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
 
-      <DialogPrimitive.Root
+      <ConfirmDialog
         open={Boolean(categoryToDelete)}
         onOpenChange={(open) => {
           if (!open && !deletingCategoryId) {
@@ -674,58 +634,21 @@ export function Sidebar({
             setDeleteCategoryError("")
           }
         }}
-      >
-        <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] transition-opacity" />
-          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl outline-none">
-            <div className="p-6">
-              <div className="flex items-start gap-3.5">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
-                  <AlertTriangle className="size-5" />
-                </div>
-                <div className="min-w-0 pt-0.5">
-                  <DialogPrimitive.Title className="text-base font-semibold text-foreground">
-                    删除分类
-                  </DialogPrimitive.Title>
-                  <DialogPrimitive.Description className="mt-1.5 text-sm leading-6 text-muted-foreground">
-                    确定要删除“{categoryToDelete?.name}”吗？
-                    <br />
-                    {categoryToDelete && categoryToDelete.count > 0
-                      ? `该分类下的 ${categoryToDelete.count} 篇文档会移动到「产品文档」，文档本身不会被删除。`
-                      : "该分类下暂无文档，删除后可在需要时重新创建。"}
-                  </DialogPrimitive.Description>
-                </div>
-              </div>
-              {deleteCategoryError && (
-                <p className="mt-4 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive">
-                  {deleteCategoryError}
-                </p>
-              )}
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/30 px-6 py-4">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                disabled={Boolean(deletingCategoryId)}
-                onClick={() => setCategoryToDelete(null)}
-              >
-                取消
-              </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                size="sm"
-                disabled={Boolean(deletingCategoryId) || !categoryToDelete}
-                onClick={() => void confirmDeleteCategory()}
-              >
-                {deletingCategoryId ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-                {deletingCategoryId ? "删除中…" : "删除分类"}
-              </Button>
-            </div>
-          </DialogPrimitive.Content>
-        </DialogPrimitive.Portal>
-      </DialogPrimitive.Root>
+        title="删除分类"
+        description={
+          <>
+            确定要删除“{categoryToDelete?.name}”吗？
+            <br />
+            {categoryToDelete && categoryToDelete.count > 0
+              ? `该分类下的 ${categoryToDelete.count} 篇文档会移动到「产品文档」，文档本身不会被删除。`
+              : "该分类下暂无文档，删除后可在需要时重新创建。"}
+          </>
+        }
+        confirmText="删除分类"
+        loading={Boolean(deletingCategoryId)}
+        error={deleteCategoryError}
+        onConfirm={confirmDeleteCategory}
+      />
     </>
   )
 

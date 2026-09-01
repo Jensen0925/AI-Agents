@@ -67,6 +67,8 @@ type DocumentsViewProps = {
   onProcess: (document: KnowledgeDoc) => Promise<void>
   onDelete: (document: KnowledgeDoc) => Promise<void>
   onPreview: (document: KnowledgeDoc) => void
+  /** 正在删除的文档 id：对应卡片显示 spinner 而非删除按钮。 */
+  deletingDocumentId?: string | null
   /** 可选：载入示例资料。仅演示身份提供该入口，真实账号不展示。 */
   onLoadDemo?: () => void
 }
@@ -85,6 +87,7 @@ export function DocumentsView({
   onProcess,
   onDelete,
   onPreview,
+  deletingDocumentId = null,
   onLoadDemo,
 }: DocumentsViewProps) {
   const [query, setQuery] = useState("")
@@ -308,6 +311,7 @@ export function DocumentsView({
                 onProcess={onProcess}
                 onDelete={onDelete}
                 onPreview={onPreview}
+                deletingDocumentId={deletingDocumentId}
               />
             ))}
           </div>
@@ -322,6 +326,7 @@ export function DocumentsView({
                 onProcess={onProcess}
                 onDelete={onDelete}
                 onPreview={onPreview}
+                deletingDocumentId={deletingDocumentId}
               />
             ))}
           </div>
@@ -342,6 +347,8 @@ type DocumentActions = {
   onProcess: (document: KnowledgeDoc) => Promise<void>
   onDelete: (document: KnowledgeDoc) => Promise<void>
   onPreview: (document: KnowledgeDoc) => void
+  /** 正在删除的文档 id：对应条目显示 spinner 而非删除按钮。 */
+  deletingDocumentId?: string | null
 }
 
 function CategorySelect({
@@ -376,10 +383,23 @@ function CategorySelect({
   )
 }
 
-function ActionButtons({ document, onProcess, onDelete, onPreview }: DocumentActions) {
+function ActionButtons({
+  document,
+  onProcess,
+  onDelete,
+  onPreview,
+  deletingDocumentId,
+}: DocumentActions) {
   const processing = document.rawStatus === "processing"
+  const deleting = deletingDocumentId === document.id
   return (
-    <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+    <div
+      className={cn(
+        // 默认隐藏、悬停/聚焦时浮现；删除中强制常驻，保证 spinner 始终可见。
+        "flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100",
+        deleting && "opacity-100",
+      )}
+    >
       <button
         type="button"
         onClick={(event) => {
@@ -407,15 +427,20 @@ function ActionButtons({ document, onProcess, onDelete, onPreview }: DocumentAct
       </button>
       <button
         type="button"
+        disabled={deleting}
         onClick={(event) => {
           event.stopPropagation()
           void onDelete(document)
         }}
-        className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+        className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-60"
         title="删除文档"
         aria-label="删除文档"
       >
-        <Trash2 className="size-3.5" />
+        {deleting ? (
+          <Loader2 className="size-3.5 animate-spin text-destructive" />
+        ) : (
+          <Trash2 className="size-3.5" />
+        )}
       </button>
     </div>
   )

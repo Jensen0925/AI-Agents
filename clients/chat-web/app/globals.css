@@ -19,6 +19,7 @@
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-destructive: var(--destructive);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
@@ -36,84 +37,95 @@
   --color-background: var(--background);
   --font-sans: 'Geist', 'Geist Fallback', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'Geist Mono', 'Geist Mono Fallback', ui-monospace, monospace;
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+  /* WorkBuddy 风格紧凑圆角：sm 4 / md 6 / lg 10 / xl 12 / 2xl 16 */
+  --radius-sm: calc(var(--radius) * 0.4);
+  --radius-md: calc(var(--radius) * 0.6);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  --radius-xl: calc(var(--radius) * 1.2);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-3xl: calc(var(--radius) * 2);
+  --radius-4xl: calc(var(--radius) * 2.4);
 }
 
 :root {
   color-scheme: light;
-  --background: oklch(0.988 0.002 150);
-  --foreground: oklch(0.21 0.02 160);
+  /* WorkBuddy 风格：以中性极浅灰作底，卡片纯白，弱化色相让紫色主色更聚焦。 */
+  --background: oklch(0.985 0.003 280);
+  --foreground: oklch(0.18 0.01 280);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.02 160);
+  --card-foreground: oklch(0.18 0.01 280);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.02 160);
-  --primary: oklch(0.55 0.115 163);
-  --primary-foreground: oklch(0.98 0.01 150);
-  --secondary: oklch(0.962 0.005 150);
-  --secondary-foreground: oklch(0.3 0.02 160);
-  --muted: oklch(0.96 0.005 150);
-  --muted-foreground: oklch(0.5 0.02 155);
-  --accent: oklch(0.935 0.035 163);
-  --accent-foreground: oklch(0.35 0.07 163);
-  --destructive: oklch(0.577 0.2 27);
-  --border: oklch(0.918 0.006 150);
-  --input: oklch(0.918 0.006 150);
-  --ring: oklch(0.55 0.115 163);
-  --chart-1: oklch(0.55 0.115 163);
-  --chart-2: oklch(0.66 0.09 195);
-  --chart-3: oklch(0.6 0.08 225);
-  --chart-4: oklch(0.7 0.1 125);
-  --chart-5: oklch(0.5 0.03 160);
-  --radius: 0.75rem;
-  --sidebar: oklch(0.974 0.006 150);
-  --sidebar-foreground: oklch(0.3 0.02 160);
-  --sidebar-primary: oklch(0.55 0.115 163);
-  --sidebar-primary-foreground: oklch(0.98 0.01 150);
-  --sidebar-accent: oklch(0.935 0.035 163);
-  --sidebar-accent-foreground: oklch(0.33 0.06 163);
-  --sidebar-border: oklch(0.918 0.006 150);
-  --sidebar-ring: oklch(0.55 0.115 163);
+  --popover-foreground: oklch(0.18 0.01 280);
+  /* 主色：靛紫 #6d5cf4 系，对应 WorkBuddy 应用主强调色。 */
+  --primary: oklch(0.55 0.2 275);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.965 0.004 280);
+  --secondary-foreground: oklch(0.25 0.01 280);
+  --muted: oklch(0.965 0.004 280);
+  --muted-foreground: oklch(0.5 0.01 280);
+  --accent: oklch(0.955 0.02 275);
+  --accent-foreground: oklch(0.28 0.12 275);
+  --destructive: oklch(0.6 0.22 25);
+  --destructive-foreground: oklch(0.99 0 0);
+  /* 边框/分割：8% / 6% 黑叠加，比之前更克制。 */
+  --border: oklch(0.2 0 0 / 0.08);
+  --input: oklch(0.2 0 0 / 0.08);
+  --ring: oklch(0.55 0.2 275 / 0.4);
+  /* 图表色：以紫为主轴，辅以品红/青/琥珀/灰，对齐 WorkBuddy 调性。 */
+  --chart-1: oklch(0.55 0.2 275);
+  --chart-2: oklch(0.6 0.16 320);
+  --chart-3: oklch(0.65 0.12 200);
+  --chart-4: oklch(0.72 0.14 75);
+  --chart-5: oklch(0.55 0.02 280);
+  --radius: 0.625rem;
+  /* 侧栏：与背景同色系但略低饱和，保持层次而不抢戏。 */
+  --sidebar: oklch(0.975 0.004 280);
+  --sidebar-foreground: oklch(0.25 0.01 280);
+  --sidebar-primary: oklch(0.55 0.2 275);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.95 0.025 275);
+  --sidebar-accent-foreground: oklch(0.25 0.1 275);
+  --sidebar-border: oklch(0.2 0 0 / 0.06);
+  --sidebar-ring: oklch(0.55 0.2 275 / 0.35);
 }
 
 .dark {
   color-scheme: dark;
-  --background: oklch(0.185 0.01 160);
-  --foreground: oklch(0.95 0.01 150);
-  --card: oklch(0.225 0.012 160);
-  --card-foreground: oklch(0.95 0.01 150);
-  --popover: oklch(0.225 0.012 160);
-  --popover-foreground: oklch(0.95 0.01 150);
-  --primary: oklch(0.72 0.12 163);
-  --primary-foreground: oklch(0.2 0.04 163);
-  --secondary: oklch(0.27 0.015 160);
-  --secondary-foreground: oklch(0.95 0.01 150);
-  --muted: oklch(0.27 0.015 160);
-  --muted-foreground: oklch(0.68 0.015 155);
-  --accent: oklch(0.3 0.04 163);
-  --accent-foreground: oklch(0.88 0.06 163);
-  --destructive: oklch(0.704 0.191 22);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.72 0.12 163);
-  --chart-1: oklch(0.72 0.12 163);
-  --chart-2: oklch(0.7 0.08 195);
-  --chart-3: oklch(0.66 0.07 225);
-  --chart-4: oklch(0.74 0.09 125);
-  --chart-5: oklch(0.6 0.03 160);
-  --sidebar: oklch(0.205 0.012 160);
-  --sidebar-foreground: oklch(0.95 0.01 150);
-  --sidebar-primary: oklch(0.72 0.12 163);
-  --sidebar-primary-foreground: oklch(0.2 0.04 163);
-  --sidebar-accent: oklch(0.3 0.04 163);
-  --sidebar-accent-foreground: oklch(0.88 0.06 163);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.72 0.12 163);
+  /* 深色：近黑略偏冷的底，卡片略亮一档，对应 WorkBuddy 深色面板的层次。 */
+  --background: oklch(0.195 0.006 280);
+  --foreground: oklch(0.95 0.002 280);
+  --card: oklch(0.245 0.007 280);
+  --card-foreground: oklch(0.95 0.002 280);
+  --popover: oklch(0.245 0.007 280);
+  --popover-foreground: oklch(0.95 0.002 280);
+  /* 深色主色提亮为淡紫，确保在深底上的对比与 WorkBuddy 视觉一致。 */
+  --primary: oklch(0.7 0.17 275);
+  --primary-foreground: oklch(0.18 0.04 275);
+  --secondary: oklch(0.275 0.008 280);
+  --secondary-foreground: oklch(0.95 0.002 280);
+  --muted: oklch(0.275 0.008 280);
+  --muted-foreground: oklch(0.68 0.01 280);
+  --accent: oklch(0.305 0.05 275);
+  --accent-foreground: oklch(0.9 0.06 275);
+  --destructive: oklch(0.72 0.18 25);
+  --destructive-foreground: oklch(0.2 0.04 25);
+  --border: oklch(1 0 0 / 0.08);
+  --input: oklch(1 0 0 / 0.12);
+  --ring: oklch(0.7 0.17 275 / 0.4);
+  --chart-1: oklch(0.7 0.17 275);
+  --chart-2: oklch(0.72 0.14 320);
+  --chart-3: oklch(0.72 0.11 200);
+  --chart-4: oklch(0.78 0.13 75);
+  --chart-5: oklch(0.65 0.02 280);
+  /* 侧栏略高于底色，模拟 WorkBuddy 「侧栏浮于主区」 的视觉。 */
+  --sidebar: oklch(0.215 0.007 280);
+  --sidebar-foreground: oklch(0.95 0.002 280);
+  --sidebar-primary: oklch(0.7 0.17 275);
+  --sidebar-primary-foreground: oklch(0.18 0.04 275);
+  --sidebar-accent: oklch(0.3 0.05 275);
+  --sidebar-accent-foreground: oklch(0.9 0.06 275);
+  --sidebar-border: oklch(1 0 0 / 0.08);
+  --sidebar-ring: oklch(0.7 0.17 275 / 0.4);
 }
 
 @layer base {
