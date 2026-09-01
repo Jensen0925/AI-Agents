@@ -3,10 +3,9 @@
 import { useMemo, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import {
-  documentCategoryDefinitions,
   type Category,
   type DocStatus,
-  type DocumentCategoryId,
+  type DocumentCategoryValue,
   type KnowledgeDoc,
 } from "@/lib/knowledge-data"
 import { Button } from "@/components/ui/button"
@@ -20,9 +19,18 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  Sparkles,
   Trash2,
   Upload,
 } from "lucide-react"
+
+/** 空态里说明的建库流程，与后端实际的解析→切片→索引→问答链路保持一致。 */
+const INDEXING_STEPS = [
+  { no: "01", text: "解析：抽取规则、结算单与公告中的条款与表格" },
+  { no: "02", text: "切片：按章节与条款边界切分为可检索片段" },
+  { no: "03", text: "索引：建立关键词与向量混合索引" },
+  { no: "04", text: "问答：带条款定位的答案生成" },
+]
 
 const typeIcon: Record<KnowledgeDoc["type"], React.ReactNode> = {
   PDF: <FileText className="size-5" />,
@@ -39,27 +47,34 @@ const statusStyle: Record<DocStatus, string> = {
   处理失败: "bg-destructive/15 text-destructive",
 }
 
+type CategoryOption = { id: string; name: string }
+
 type DocumentsViewProps = {
   documents: KnowledgeDoc[]
   categories: Category[]
+  /** 可指派给文档的分类（内置 + 用户自建），用于上传与改分类下拉框。 */
+  categoryOptions: CategoryOption[]
   activeCategory: string
   onCategoryChange: (id: string) => void
   loading: boolean
   error: string
   uploading: boolean
-  onUpload: (file: File, category?: DocumentCategoryId) => Promise<void>
+  onUpload: (file: File, category?: DocumentCategoryValue) => Promise<void>
   onDocumentCategoryChange: (
     document: KnowledgeDoc,
-    category: DocumentCategoryId,
+    category: DocumentCategoryValue,
   ) => Promise<void>
   onProcess: (document: KnowledgeDoc) => Promise<void>
   onDelete: (document: KnowledgeDoc) => Promise<void>
   onPreview: (document: KnowledgeDoc) => void
+  /** 可选：载入示例资料。仅演示身份提供该入口，真实账号不展示。 */
+  onLoadDemo?: () => void
 }
 
 export function DocumentsView({
   documents,
   categories,
+  categoryOptions,
   activeCategory,
   onCategoryChange,
   loading,
@@ -70,10 +85,11 @@ export function DocumentsView({
   onProcess,
   onDelete,
   onPreview,
+  onLoadDemo,
 }: DocumentsViewProps) {
   const [query, setQuery] = useState("")
   const [layout, setLayout] = useState<"grid" | "list">("grid")
-  const [uploadCategory, setUploadCategory] = useState<"auto" | DocumentCategoryId>("auto")
+  const [uploadCategory, setUploadCategory] = useState<"auto" | string>("auto")
   const inputRef = useRef<HTMLInputElement>(null)
 
   const filtered = useMemo(() => {
@@ -90,6 +106,11 @@ export function DocumentsView({
   }, [activeCategory, documents, query])
 
   const activeName = categories.find((category) => category.id === activeCategory)?.name ?? "全部文档"
+  const totalChunks = useMemo(
+    () => documents.reduce((sum, document) => sum + (document.chunkCount ?? 0), 0),
+    [documents],
+  )
+  const isFiltering = query.trim().length > 0 || activeCategory !== "all"
 
   async function selectFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
@@ -106,7 +127,8 @@ export function DocumentsView({
           <div>
             <h1 className="text-balance text-xl font-semibold text-foreground">{activeName}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              共 {filtered.length} 篇文档 · 由 AI 自动索引与摘要
+              共 {documents.length} 篇资料 · {totalChunks} 个向量片段
+              {isFiltering && ` · 当前筛选出 ${filtered.length} 篇`}
             </p>
           </div>
           <input
@@ -124,13 +146,11 @@ export function DocumentsView({
               id="upload-category"
               value={uploadCategory}
               disabled={uploading}
-              onChange={(event) =>
-                setUploadCategory(event.target.value as "auto" | DocumentCategoryId)
-              }
+              onChange={(event) => setUploadCategory(event.target.value)}
               className="h-11 rounded-xl border border-input bg-card px-3 text-sm text-foreground outline-none transition-colors focus:border-ring focus:ring-3 focus:ring-ring/20 disabled:opacity-50"
             >
               <option value="auto">自动分类</option>
-              {documentCategoryDefinitions.map((category) => (
+              {categoryOptions.map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
                 </option>
@@ -155,8 +175,11 @@ export function DocumentsView({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="搜索文档标题、内容或标签…"
-              className="h-10 w-full rounded-xl border border-input bg-card pl-9 pr-4 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/20"
+              className="h-10 w-full rounded-xl border border-input bg-card pl-9 pr-20 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/20"
             />
+            <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-md border border-border bg-secondary px-1.5 py-0.5 text-[11px] text-muted-foreground sm:block">
+              Ctrl K
+            </kbd>
           </div>
           <div className="flex items-center gap-1 rounded-xl border border-input bg-card p-1">
             <button
@@ -214,19 +237,73 @@ export function DocumentsView({
             <Loader2 className="mr-2 size-5 animate-spin" /> 正在加载文档
           </div>
         ) : filtered.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center text-center">
-            <div className="flex size-14 items-center justify-center rounded-2xl bg-secondary text-muted-foreground">
-              <Search className="size-6" />
+          // 库里已有文档但被筛掉，与「资料库完全为空」需要不同的引导。
+          isFiltering ? (
+            <div className="flex h-full flex-col items-center justify-center text-center">
+              <div className="flex size-14 items-center justify-center rounded-2xl bg-secondary text-muted-foreground">
+                <Search className="size-6" />
+              </div>
+              <p className="mt-4 text-sm font-medium text-foreground">未找到相关文档</p>
+              <p className="mt-1 text-sm text-muted-foreground">换个关键词，或切换到其他分类看看</p>
             </div>
-            <p className="mt-4 text-sm font-medium text-foreground">未找到相关文档</p>
-            <p className="mt-1 text-sm text-muted-foreground">上传文档，或试试其他关键词和分类</p>
-          </div>
+          ) : (
+            <div className="mx-auto flex max-w-xl flex-col items-center pt-10 text-center">
+              <div className="relative">
+                <div
+                  aria-hidden
+                  className="absolute -inset-5 rounded-full bg-primary/15 blur-2xl"
+                />
+                <div className="relative flex size-16 items-center justify-center rounded-3xl bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-lg shadow-primary/25">
+                  <Sparkles className="size-8" />
+                </div>
+              </div>
+              <h2 className="mt-6 text-xl font-semibold tracking-tight text-foreground">
+                资料库还是空的
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                导入规则、细则与结算数据后，系统会自动完成解析、切片与索引，随后即可就条款提问。
+              </p>
+              <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                <Button
+                  size="lg"
+                  className="gap-2"
+                  disabled={uploading}
+                  onClick={() => inputRef.current?.click()}
+                >
+                  {uploading ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Upload className="size-4" />
+                  )}
+                  上传第一批资料
+                </Button>
+                {onLoadDemo && (
+                  <Button variant="outline" size="lg" className="gap-2" onClick={onLoadDemo}>
+                    <FileText className="size-4" />
+                    载入示例资料
+                  </Button>
+                )}
+              </div>
+              <ul className="mt-8 w-full space-y-2.5 text-left">
+                {INDEXING_STEPS.map((step) => (
+                  <li
+                    key={step.no}
+                    className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-2.5"
+                  >
+                    <span className="text-xs font-semibold text-primary">{step.no}</span>
+                    <span className="text-sm text-muted-foreground">{step.text}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
         ) : layout === "grid" ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
             {filtered.map((document) => (
               <DocCard
                 key={document.id}
                 document={document}
+                categoryOptions={categoryOptions}
                 onCategoryChange={onDocumentCategoryChange}
                 onProcess={onProcess}
                 onDelete={onDelete}
@@ -240,6 +317,7 @@ export function DocumentsView({
               <DocRow
                 key={document.id}
                 document={document}
+                categoryOptions={categoryOptions}
                 onCategoryChange={onDocumentCategoryChange}
                 onProcess={onProcess}
                 onDelete={onDelete}
@@ -255,16 +333,29 @@ export function DocumentsView({
 
 type DocumentActions = {
   document: KnowledgeDoc
+  /** 可指派的分类（内置 + 用户自建）。 */
+  categoryOptions: CategoryOption[]
   onCategoryChange: (
     document: KnowledgeDoc,
-    category: DocumentCategoryId,
+    category: DocumentCategoryValue,
   ) => Promise<void>
   onProcess: (document: KnowledgeDoc) => Promise<void>
   onDelete: (document: KnowledgeDoc) => Promise<void>
   onPreview: (document: KnowledgeDoc) => void
 }
 
-function CategorySelect({ document, onCategoryChange }: DocumentActions) {
+function CategorySelect({
+  document,
+  categoryOptions,
+  onCategoryChange,
+}: Pick<DocumentActions, "document" | "categoryOptions" | "onCategoryChange">) {
+  // 文档可能停在一个已被删除的自定义分类上，此时补一个占位项，
+  // 避免 select 落到第一个内置分类而显示成错误的归属。
+  const known = categoryOptions.some((option) => option.id === document.category)
+  const options = known
+    ? categoryOptions
+    : [...categoryOptions, { id: document.category, name: "未分类（已删除）" }]
+
   return (
     <select
       value={document.category}
@@ -272,11 +363,11 @@ function CategorySelect({ document, onCategoryChange }: DocumentActions) {
       onClick={(event) => event.stopPropagation()}
       onChange={(event) => {
         event.stopPropagation()
-        void onCategoryChange(document, event.target.value as DocumentCategoryId)
+        void onCategoryChange(document, event.target.value)
       }}
       className="h-8 rounded-lg border border-input bg-card px-2 text-xs text-foreground outline-none transition-colors hover:border-ring/50 focus:border-ring focus:ring-2 focus:ring-ring/20"
     >
-      {documentCategoryDefinitions.map((category) => (
+      {options.map((category) => (
         <option key={category.id} value={category.id}>
           {category.name}
         </option>

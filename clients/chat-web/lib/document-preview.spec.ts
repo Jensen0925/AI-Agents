@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { getDocumentPreviewKind } from "./document-preview"
+import { getDocumentPreviewKind, splitIntoChunks } from "./document-preview"
 
 describe("document preview", () => {
   it("recognizes PDF files by MIME type or extension", () => {
@@ -21,5 +21,37 @@ describe("document preview", () => {
         "requirement.docx",
       ),
     ).toBe("unsupported")
+  })
+})
+
+describe("splitIntoChunks", () => {
+  it("returns no chunks for blank content", () => {
+    expect(splitIntoChunks("")).toEqual([])
+    expect(splitIntoChunks("   \n\n  ")).toEqual([])
+  })
+
+  it("keeps short paragraphs together in a single chunk", () => {
+    const chunks = splitIntoChunks("第一段。\n\n第二段。", 600)
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0]).toContain("第一段")
+    expect(chunks[0]).toContain("第二段")
+  })
+
+  it("breaks on paragraph boundaries once the target size is exceeded", () => {
+    const paragraph = "啊".repeat(300)
+    const chunks = splitIntoChunks(`${paragraph}\n\n${paragraph}`, 400)
+    expect(chunks).toHaveLength(2)
+    expect(chunks[0]).toBe(paragraph)
+    expect(chunks[1]).toBe(paragraph)
+  })
+
+  it("hard-splits a single line that is longer than the target size", () => {
+    const chunks = splitIntoChunks("字".repeat(1000), 400)
+    expect(chunks).toHaveLength(3)
+    expect(chunks.every((chunk) => chunk.length <= 400)).toBe(true)
+  })
+
+  it("normalizes CRLF line endings", () => {
+    expect(splitIntoChunks("甲\r\n\r\n乙", 600)[0]).toBe("甲\n\n乙")
   })
 })

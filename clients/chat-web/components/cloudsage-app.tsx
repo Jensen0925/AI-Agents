@@ -11,16 +11,24 @@ import {
 } from "@/lib/auth"
 import {
   buildCategories,
+  buildCategoryOptions,
   documents as demoDocuments,
   mapDocumentRecord,
   type Category,
-  type DocumentCategoryId,
+  type DocumentCategoryValue,
   type DocumentRecord,
   type KnowledgeDoc,
 } from "@/lib/knowledge-data"
+import {
+  createCategory as requestCreateCategory,
+  deleteCategory as requestDeleteCategory,
+  listCategories,
+  type UserCategory,
+} from "@/lib/categories"
 import { Sidebar, type SidebarConversation } from "@/components/sidebar"
 import { DocumentsView } from "@/components/documents-view"
 import { DocumentPreviewDialog } from "@/components/document-preview-dialog"
+import { GlobalSearch } from "@/components/global-search"
 import { ChatView } from "@/components/chat-view"
 
 type View = "documents" | "chat"
@@ -40,6 +48,9 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
   const [documentsError, setDocumentsError] = useState("")
   const [uploading, setUploading] = useState(false)
   const [previewDocument, setPreviewDocument] = useState<KnowledgeDoc | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  /** 用户自建分类（内置分类不通过接口返回）。 */
+  const [customCategories, setCustomCategories] = useState<UserCategory[]>([])
   const [newConversationSignal, setNewConversationSignal] = useState(0)
   const [conversations, setConversations] = useState<SidebarConversation[]>([])
   const [pinnedConversationIds, setPinnedConversationIds] = useState<string[]>([])
@@ -52,7 +63,19 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
   const conversationToOpenRef = useRef<string | undefined>(undefined)
 
   const demo = hydrated && isDemoSession()
-  const categories = useMemo<Category[]>(() => buildCategories(documents), [documents])
+  const categories = useMemo<Category[]>(
+    () => buildCategories(documents, customCategories),
+    [documents, customCategories],
+  )
+  // 上传与改分类下拉框的选项：内置分类 + 用户自建分类。
+  const categoryOptions = useMemo(
+    () => buildCategoryOptions(customCategories),
+    [customCategories],
+  )
+  const totalChunks = useMemo(
+    () => documents.reduce((sum, document) => sum + (document.chunkCount ?? 0), 0),
+    [documents],
+  )
   const pinnedConversationStorageKey = session
     ? `cloudsage:pinned-conversations:${session.user.id}`
     : null
@@ -109,6 +132,45 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
     }
   }, [])
 
+  // 演示身份的「载入示例资料」：直接恢复内置示例文档，不写入真实库。
+  const loadDemoDocuments = useCallback(() => {
+    setDocuments(demoDocuments)
+    setDocumentsError("")
+  }, [])
+
+  // 自定义分类读取失败不影响文档列表，侧栏退化为只显示内置分类。
+  const loadCategories = useCallback(async () => {
+    if (isDemoSession()) {
+      setCustomCategories([])
+      return
+    }
+    try {
+      setCustomCategories(await listCategories())
+    } catch {
+      setCustomCategories([])
+    }
+  }, [])
+
+  /**
+   * 新建自定义分类。异常直接抛给侧栏弹窗展示，成功后刷新列表让入口立刻出现，
+   * 并把新建的分类作为当前筛选，省掉用户再点一次。
+   */
+  async function createCategory(name: string) {
+    const created = await requestCreateCategory(name.trim())
+    await loadCategories()
+    setActiveCategory(created.id)
+  }
+
+  /**
+   * 删除自定义分类。后端会把该分类下的文档回落到内置分类，所以要连带刷新文档；
+   * 若当前正停在被删除的分类上，则退回「全部文档」，避免停留在一个已不存在的分类。
+   */
+  async function deleteCategory(id: string) {
+    await requestDeleteCategory(id)
+    if (activeCategory === id) setActiveCategory("all")
+    await Promise.all([loadCategories(), loadDocuments()])
+  }
+
   useEffect(() => {
     const current = getSession()
     setSession(current)
@@ -118,9 +180,22 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
       return
     }
     void loadDocuments()
-  }, [loadDocuments, router])
+    void loadCategories()
+  }, [loadCategories, loadDocuments, router])
 
-  async function uploadDocument(file: File, category?: DocumentCategoryId) {
+  // Ctrl/Cmd + K 唤起全局语义检索。输入框内同样允许触发，方便连续检索。
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault()
+        setSearchOpen((open) => !open)
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
+
+  async function uploadDocument(file: File, category?: DocumentCategoryValue) {
     if (demo) {
       setDocumentsError("演示身份只能浏览示例文档，请使用真实账号上传文件。")
       return
@@ -147,7 +222,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
 
   async function updateDocumentCategory(
     document: KnowledgeDoc,
-    category: DocumentCategoryId,
+    category: DocumentCategoryValue,
   ) {
     if (demo) {
       setDocumentsError("演示身份不能修改文档分类，请使用真实账号。")
@@ -318,12 +393,18 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
         onRenameConversation={renameConversation}
         onDeleteConversation={deleteConversation}
         onLogout={logout}
+        documentCount={documents.length}
+        chunkCount={totalChunks}
+        // 演示身份只读，不提供分类增删入口。
+        onCreateCategory={demo ? undefined : createCategory}
+        onDeleteCategory={demo ? undefined : deleteCategory}
       />
       <div className="min-w-0 flex-1 overflow-hidden">
         {view === "documents" ? (
           <DocumentsView
             documents={documents}
             categories={categories}
+            categoryOptions={categoryOptions}
             activeCategory={activeCategory}
             onCategoryChange={setActiveCategory}
             loading={documentsLoading}
@@ -334,6 +415,7 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
             onProcess={processDocument}
             onDelete={deleteDocument}
             onPreview={setPreviewDocument}
+            onLoadDemo={demo ? loadDemoDocuments : undefined}
           />
         ) : (
           <ChatView
@@ -352,6 +434,13 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
         onOpenChange={(open) => {
           if (!open) setPreviewDocument(null)
         }}
+      />
+      <GlobalSearch
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        documents={documents}
+        demo={demo}
+        onSelectDocument={setPreviewDocument}
       />
     </main>
   )

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import * as Dialog from "@radix-ui/react-dialog"
 import {
   Download,
@@ -12,9 +12,11 @@ import {
 import { api, apiErrorMessage } from "@/lib/api"
 import {
   getDocumentPreviewKind,
+  splitIntoChunks,
   type DocumentPreviewKind,
 } from "@/lib/document-preview"
 import type { KnowledgeDoc } from "@/lib/knowledge-data"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
 type DocumentPreviewDialogProps = {
@@ -23,6 +25,15 @@ type DocumentPreviewDialogProps = {
   demo: boolean
   onOpenChange: (open: boolean) => void
 }
+
+/** 预览（渲染后）/ 原文（纯文本）/ 分块（按段落边界切分后的片段）。 */
+type PreviewTab = "preview" | "raw" | "chunks"
+
+const TAB_OPTIONS: ReadonlyArray<{ key: PreviewTab; label: string }> = [
+  { key: "preview", label: "预览" },
+  { key: "raw", label: "原文" },
+  { key: "chunks", label: "分块" },
+]
 
 function PreviewSpinner() {
   return (
@@ -123,6 +134,57 @@ function SafeMarkdownPreview({ content }: { content: string }) {
   )
 }
 
+function RawTextView({ content }: { content: string }) {
+  return (
+    <pre className="mx-auto w-full max-w-4xl whitespace-pre-wrap break-words px-5 py-7 font-mono text-[13px] leading-6 text-foreground sm:px-8">
+      {content}
+    </pre>
+  )
+}
+
+function ChunksView({
+  chunks,
+  chunkCount,
+}: {
+  chunks: string[]
+  chunkCount?: number
+}) {
+  if (chunks.length === 0) {
+    return (
+      <div className="flex h-full min-h-64 items-center justify-center p-6 text-center text-sm text-muted-foreground">
+        暂无可分块的内容
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-4xl px-5 py-7 sm:px-8">
+      <p className="mb-4 text-xs leading-relaxed text-muted-foreground">
+        共 {chunks.length} 个片段
+        {typeof chunkCount === "number" && chunkCount > 0 && (
+          <> · 服务端记录 {chunkCount} 个</>
+        )}
+        。分块为客户端按段落边界的近似还原，用于核对切片效果，不保证与建库结果逐字一致。
+      </p>
+      <ol className="flex flex-col gap-3">
+        {chunks.map((chunk, index) => (
+          <li key={index} className="rounded-xl border border-border bg-card p-4">
+            <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="rounded-md bg-secondary px-1.5 py-0.5 font-medium">
+                #{index + 1}
+              </span>
+              <span>{chunk.length} 字符</span>
+            </div>
+            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
+              {chunk}
+            </p>
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
 export function DocumentPreviewDialog({
   document,
   open,
@@ -135,6 +197,10 @@ export function DocumentPreviewDialog({
   const [objectUrl, setObjectUrl] = useState("")
   const [previewKind, setPreviewKind] =
     useState<DocumentPreviewKind>("unsupported")
+  const [tab, setTab] = useState<PreviewTab>("preview")
+
+  // 分块是客户端对原文按段落边界的近似还原，仅用于人工核对切片效果。
+  const chunks = useMemo(() => splitIntoChunks(content), [content])
 
   useEffect(() => {
     let disposed = false
@@ -144,6 +210,8 @@ export function DocumentPreviewDialog({
     setError("")
     setContent("")
     setObjectUrl("")
+    // 换文档或重开弹窗时回到预览页，避免沿用上一篇的「原文/分块」视图。
+    setTab("preview")
 
     if (!open || !document) {
       return () => {
@@ -232,6 +300,30 @@ export function DocumentPreviewDialog({
                 {document ? `${document.type} · ${document.size}` : "正在准备文档"}
               </Dialog.Description>
             </div>
+            {previewKind === "text" && !loading && !error && (
+              <div
+                role="group"
+                aria-label="文档视图"
+                className="hidden shrink-0 items-center gap-1 rounded-xl border border-input bg-card p-1 sm:flex"
+              >
+                {TAB_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => setTab(option.key)}
+                    aria-pressed={tab === option.key}
+                    className={cn(
+                      "rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
+                      tab === option.key
+                        ? "bg-secondary text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
             {!demo && objectUrl && (
               <Button
                 type="button"
@@ -278,7 +370,13 @@ export function DocumentPreviewDialog({
                 className="h-full min-h-[70vh] w-full border-0 bg-background"
               />
             ) : previewKind === "text" ? (
-              <SafeMarkdownPreview content={content} />
+              tab === "raw" ? (
+                <RawTextView content={content} />
+              ) : tab === "chunks" ? (
+                <ChunksView chunks={chunks} chunkCount={document?.chunkCount} />
+              ) : (
+                <SafeMarkdownPreview content={content} />
+              )
             ) : (
               <div className="flex h-full min-h-64 items-center justify-center p-6 text-center">
                 <div className="max-w-md">

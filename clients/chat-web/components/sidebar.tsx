@@ -4,6 +4,7 @@ import { useMemo, useState } from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { cn } from "@/lib/utils"
 import { apiErrorMessage } from "@/lib/api"
+import { MAX_CATEGORY_NAME_LENGTH } from "@/lib/categories"
 import type { Category } from "@/lib/knowledge-data"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,6 +28,9 @@ import {
 } from "lucide-react"
 
 type View = "documents" | "chat"
+
+/** 向量片段软上限，仅用于侧栏配额条的占比展示，不是服务端的硬性限制。 */
+const VECTOR_QUOTA_CAP = 2000
 
 export type SidebarConversation = {
   id: string
@@ -52,6 +56,12 @@ type SidebarProps = {
   onRenameConversation?: (id: string, title: string) => Promise<void> | void
   onDeleteConversation?: (id: string) => Promise<void> | void
   onLogout: () => void
+  /** 文档总数与向量片段总数，用于侧栏底部的配额条。 */
+  documentCount?: number
+  chunkCount?: number
+  /** 自定义分类的增删入口；演示身份或未登录态不传，此时分类区只读。 */
+  onCreateCategory?: (name: string) => Promise<void>
+  onDeleteCategory?: (id: string) => Promise<void>
 }
 
 export function Sidebar({
@@ -70,6 +80,10 @@ export function Sidebar({
   onRenameConversation,
   onDeleteConversation,
   onLogout,
+  documentCount = 0,
+  chunkCount = 0,
+  onCreateCategory,
+  onDeleteCategory,
 }: SidebarProps) {
   const [conversationSearch, setConversationSearch] = useState("")
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null)
@@ -81,6 +95,15 @@ export function Sidebar({
   const [renameError, setRenameError] = useState("")
   const [renamingConversationId, setRenamingConversationId] = useState<string | null>(null)
   const [pinningConversationId, setPinningConversationId] = useState<string | null>(null)
+  // 自定义分类：新建弹窗与删除确认弹窗的状态都收敛在侧栏内部，
+  // 请求本身由上层注入，便于统一处理演示身份与错误提示。
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState("")
+  const [categoryError, setCategoryError] = useState("")
+  const [creatingCategory, setCreatingCategory] = useState(false)
+  const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null)
+  const [deletingCategoryId, setDeletingCategoryId] = useState<string | null>(null)
+  const [deleteCategoryError, setDeleteCategoryError] = useState("")
   const avatarText = (userName || userEmail || "C").trim().slice(0, 1).toUpperCase()
   const visibleConversations = useMemo(() => {
     const keyword = conversationSearch.trim().toLowerCase()
@@ -169,36 +192,87 @@ export function Sidebar({
         <>
           <div className="mt-6 flex items-center justify-between px-5 py-2">
             <span className="text-xs font-medium tracking-wide text-muted-foreground">分类</span>
-            <button
-              type="button"
-              className="text-muted-foreground transition-colors hover:text-foreground"
-              aria-label="新建分类"
-              title="分类由文档名称自动识别"
-            >
-              <Plus className="size-4" />
-            </button>
+            {onCreateCategory && (
+              <button
+                type="button"
+                className="text-muted-foreground transition-colors hover:text-foreground"
+                aria-label="新建分类"
+                title="新建自定义分类"
+                onClick={() => {
+                  setCategoryError("")
+                  setNewCategoryName("")
+                  setCategoryDialogOpen(true)
+                }}
+              >
+                <Plus className="size-4" />
+              </button>
+            )}
           </div>
 
           <div className="pretty-scroll flex flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-3">
-            {categories.map((cat) => (
-              <button
-                key={cat.id}
-                type="button"
-                onClick={() => {
-                  onCategoryChange(cat.id)
-                  onViewChange("documents")
-                }}
-                className={cn(
-                  "flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors",
-                  view === "documents" && activeCategory === cat.id
-                    ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60",
-                )}
-              >
-                <span className="truncate">{cat.name}</span>
-                <span className="ml-2 shrink-0 text-xs text-muted-foreground">{cat.count}</span>
-              </button>
-            ))}
+            {categories.map((cat) => {
+              const itemClass = cn(
+                "flex items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors",
+                view === "documents" && activeCategory === cat.id
+                  ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                  : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60",
+              )
+              const body = (
+                <>
+                  <span className="truncate">{cat.name}</span>
+                  <span className="ml-2 shrink-0 text-xs text-muted-foreground">{cat.count}</span>
+                </>
+              )
+
+              // 只有用户自建的分类允许删除；内置分类始终保留。
+              if (!cat.custom || !onDeleteCategory) {
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => {
+                      onCategoryChange(cat.id)
+                      onViewChange("documents")
+                    }}
+                    className={itemClass}
+                  >
+                    {body}
+                  </button>
+                )
+              }
+
+              return (
+                <div key={cat.id} className="group relative flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onCategoryChange(cat.id)
+                      onViewChange("documents")
+                    }}
+                    className={cn(itemClass, "w-full pr-9")}
+                  >
+                    {body}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`删除分类 ${cat.name}`}
+                    title="删除分类"
+                    disabled={Boolean(deletingCategoryId)}
+                    onClick={() => {
+                      setDeleteCategoryError("")
+                      setCategoryToDelete(cat)
+                    }}
+                    className="absolute right-1 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 group-hover:opacity-100 disabled:cursor-wait"
+                  >
+                    {deletingCategoryId === cat.id ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      <Trash2 className="size-3.5" />
+                    )}
+                  </button>
+                </div>
+              )
+            })}
           </div>
         </>
       ) : (
@@ -334,6 +408,32 @@ export function Sidebar({
           </div>
         </div>
       )}
+
+      {/* 向量索引配额：片段数相对软上限的占用比例 */}
+      <div className="border-t border-sidebar-border px-3 py-2.5">
+        <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+          <span>向量索引</span>
+          <span>{chunkCount} 片段</span>
+        </div>
+        <div
+          className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-secondary"
+          role="progressbar"
+          aria-label="向量索引占用"
+          aria-valuenow={chunkCount}
+          aria-valuemin={0}
+          aria-valuemax={VECTOR_QUOTA_CAP}
+        >
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-500"
+            style={{
+              width: `${Math.min(100, (chunkCount / VECTOR_QUOTA_CAP) * 100)}%`,
+            }}
+          />
+        </div>
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          {documentCount} 篇文档已入库
+        </p>
+      </div>
 
       <div className="border-t border-sidebar-border p-3">
         <div className="flex items-center gap-3 rounded-lg px-2 py-2">
@@ -502,8 +602,168 @@ export function Sidebar({
           </DialogPrimitive.Content>
         </DialogPrimitive.Portal>
       </DialogPrimitive.Root>
+
+      <DialogPrimitive.Root
+        open={categoryDialogOpen}
+        onOpenChange={(open) => {
+          if (!open && !creatingCategory) {
+            setCategoryDialogOpen(false)
+            setCategoryError("")
+          }
+        }}
+      >
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] transition-opacity" />
+          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl outline-none">
+            <div className="p-6">
+              <DialogPrimitive.Title className="text-base font-semibold text-foreground">
+                新建分类
+              </DialogPrimitive.Title>
+              <DialogPrimitive.Description className="mt-1.5 text-sm leading-6 text-muted-foreground">
+                自定义分类会出现在侧栏与文档筛选条中，上传文档时可以直接归类到它。
+              </DialogPrimitive.Description>
+              <Input
+                autoFocus
+                value={newCategoryName}
+                maxLength={MAX_CATEGORY_NAME_LENGTH}
+                onChange={(event) => setNewCategoryName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                    event.preventDefault()
+                    void submitCategory()
+                  }
+                }}
+                placeholder="例如：客户合同"
+                className="mt-4"
+              />
+              {categoryError && (
+                <p className="mt-3 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive">
+                  {categoryError}
+                </p>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/30 px-6 py-4">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={creatingCategory}
+                onClick={() => setCategoryDialogOpen(false)}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={creatingCategory || !newCategoryName.trim()}
+                onClick={() => void submitCategory()}
+              >
+                {creatingCategory ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+                {creatingCategory ? "创建中…" : "创建分类"}
+              </Button>
+            </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
+
+      <DialogPrimitive.Root
+        open={Boolean(categoryToDelete)}
+        onOpenChange={(open) => {
+          if (!open && !deletingCategoryId) {
+            setCategoryToDelete(null)
+            setDeleteCategoryError("")
+          }
+        }}
+      >
+        <DialogPrimitive.Portal>
+          <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[2px] transition-opacity" />
+          <DialogPrimitive.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-2xl outline-none">
+            <div className="p-6">
+              <div className="flex items-start gap-3.5">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
+                  <AlertTriangle className="size-5" />
+                </div>
+                <div className="min-w-0 pt-0.5">
+                  <DialogPrimitive.Title className="text-base font-semibold text-foreground">
+                    删除分类
+                  </DialogPrimitive.Title>
+                  <DialogPrimitive.Description className="mt-1.5 text-sm leading-6 text-muted-foreground">
+                    确定要删除“{categoryToDelete?.name}”吗？
+                    <br />
+                    {categoryToDelete && categoryToDelete.count > 0
+                      ? `该分类下的 ${categoryToDelete.count} 篇文档会移动到「产品文档」，文档本身不会被删除。`
+                      : "该分类下暂无文档，删除后可在需要时重新创建。"}
+                  </DialogPrimitive.Description>
+                </div>
+              </div>
+              {deleteCategoryError && (
+                <p className="mt-4 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs leading-5 text-destructive">
+                  {deleteCategoryError}
+                </p>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/30 px-6 py-4">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={Boolean(deletingCategoryId)}
+                onClick={() => setCategoryToDelete(null)}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                disabled={Boolean(deletingCategoryId) || !categoryToDelete}
+                onClick={() => void confirmDeleteCategory()}
+              >
+                {deletingCategoryId ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                {deletingCategoryId ? "删除中…" : "删除分类"}
+              </Button>
+            </div>
+          </DialogPrimitive.Content>
+        </DialogPrimitive.Portal>
+      </DialogPrimitive.Root>
     </>
   )
+
+  async function submitCategory() {
+    if (!onCreateCategory || creatingCategory) return
+    const name = newCategoryName.trim()
+    if (!name) {
+      setCategoryError("分类名称不能为空")
+      return
+    }
+
+    setCategoryError("")
+    setCreatingCategory(true)
+    try {
+      await onCreateCategory(name)
+      setCategoryDialogOpen(false)
+      setNewCategoryName("")
+    } catch (reason) {
+      setCategoryError(apiErrorMessage(reason))
+    } finally {
+      setCreatingCategory(false)
+    }
+  }
+
+  async function confirmDeleteCategory() {
+    if (!onDeleteCategory || !categoryToDelete || deletingCategoryId) return
+    const target = categoryToDelete
+    setDeleteCategoryError("")
+    setDeletingCategoryId(target.id)
+    try {
+      await onDeleteCategory(target.id)
+      setCategoryToDelete(null)
+    } catch (reason) {
+      setDeleteCategoryError(apiErrorMessage(reason))
+    } finally {
+      setDeletingCategoryId(null)
+    }
+  }
 
   async function saveRename() {
     if (!conversationToRename || !onRenameConversation || renamingConversationId) return

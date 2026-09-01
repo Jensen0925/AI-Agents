@@ -7,10 +7,16 @@ export type DocumentCategoryId =
   | "sales"
   | "design"
 
+/**
+ * 文档的分类取值：内置分类 id，或用户自建分类的主键（UUID）。
+ * 两者共存于 documents.category，前端统一按字符串处理。
+ */
+export type DocumentCategoryValue = DocumentCategoryId | string
+
 export type KnowledgeDoc = {
   id: string
   title: string
-  category: DocumentCategoryId
+  category: DocumentCategoryValue
   type: "PDF" | "Markdown" | "Word" | "网页" | "表格"
   summary: string
   updatedAt: string
@@ -24,10 +30,12 @@ export type KnowledgeDoc = {
   mimeType?: string
 }
 
+/** 侧栏/筛选条中的一个分类入口。custom 为 true 时表示该条目来自用户自建分类。 */
 export type Category = {
-  id: "all" | DocumentCategoryId
+  id: string
   name: string
   count: number
+  custom?: boolean
 }
 
 export const categories: Category[] = [
@@ -48,7 +56,7 @@ export type DocumentRecord = {
   chunkCount: number
   createdAt: string
   filePath?: string | null
-  category?: DocumentCategoryId
+  category?: DocumentCategoryValue
 }
 
 export const categoryDefinitions = categories.map(({ id, name }) => ({ id, name }))
@@ -132,14 +140,46 @@ export function mapDocumentRecord(record: DocumentRecord): KnowledgeDoc {
   }
 }
 
-export function buildCategories(items: KnowledgeDoc[]): Category[] {
-  return categoryDefinitions.map((category) => ({
+/**
+ * 统计各分类下的文档数：内置分类固定列出（即使为空，也保留入口），
+ * 用户自建分类追加在后面。
+ */
+export function buildCategories(
+  items: KnowledgeDoc[],
+  customCategories: Array<{ id: string; name: string }> = [],
+): Category[] {
+  const countOf = (id: string) =>
+    items.filter((document) => document.category === id).length
+
+  const builtin = categoryDefinitions.map((category) => ({
     ...category,
-    count:
-      category.id === "all"
-        ? items.length
-        : items.filter((document) => document.category === category.id).length,
+    count: category.id === "all" ? items.length : countOf(category.id),
   }))
+
+  const custom = customCategories.map((category) => ({
+    id: category.id,
+    name: category.name,
+    count: countOf(category.id),
+    custom: true,
+  }))
+
+  return [...builtin, ...custom]
+}
+
+/** 可指派给文档的分类选项（不含「全部文档」），用于上传与改分类下拉框。 */
+export function buildCategoryOptions(
+  customCategories: Array<{ id: string; name: string }> = [],
+): Array<{ id: string; name: string }> {
+  return [
+    ...documentCategoryDefinitions.map((category) => ({
+      id: category.id as string,
+      name: category.name,
+    })),
+    ...customCategories.map((category) => ({
+      id: category.id,
+      name: category.name,
+    })),
+  ]
 }
 
 export const documents: KnowledgeDoc[] = [
