@@ -36,22 +36,22 @@ export function PermissionTree({ permissions, selected, onChange }: PermissionTr
         const selectedCount = items.filter((item) => selected.includes(item.id)).length;
         const allSelected = selectedCount === items.length;
         return (
-          <div key={module} className="overflow-hidden rounded-md border border-slate-200">
-            <div className="flex items-center gap-3 bg-slate-50 px-4 py-3">
+          <div key={module} className="overflow-hidden rounded-md border border-border">
+            <div className="flex items-center gap-3 bg-muted px-4 py-3">
               <Checkbox checked={allSelected} onCheckedChange={(checked) => toggleModule(items, checked === true)} aria-label={`选择全部${module}权限`} />
-              <ChevronDown className="h-4 w-4 text-slate-400" aria-hidden="true" />
-              <span className="flex-1 text-sm font-semibold text-slate-800">{module}</span>
-              <span className="text-xs text-slate-500">{selectedCount}/{items.length}</span>
+              <ChevronDown className="size-4 text-muted-foreground" aria-hidden="true" />
+              <span className="flex-1 text-sm font-semibold text-foreground">{module}</span>
+              <span className="text-xs text-muted-foreground">{selectedCount}/{items.length}</span>
             </div>
-            <div className="grid gap-1 border-t border-slate-200 p-2 sm:grid-cols-2">
+            <div className="grid gap-1 border-t border-border p-2 sm:grid-cols-2">
               {items.map((item) => {
                 const active = selected.includes(item.id);
                 return (
-                  <label key={item.id} className={cn("flex cursor-pointer items-start gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-slate-50", active && "bg-blue-50/70")}>
+                  <label key={item.id} className={cn("flex cursor-pointer items-start gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-muted", active && "bg-primary/10")}>
                     <Checkbox checked={active} onCheckedChange={(checked) => toggle(item.id, checked === true)} className="mt-0.5" />
                     <span className="min-w-0">
-                      <span className="flex items-center gap-1.5 text-sm font-medium text-slate-700"><span>{item.name}</span>{active && <Check className="h-3.5 w-3.5 text-blue-700" aria-hidden="true" />}</span>
-                      <span className="mt-0.5 block break-all text-xs text-slate-400">{item.code}</span>
+                      <span className="flex items-center gap-1.5 text-sm font-medium text-foreground"><span>{item.name}</span>{active && <Check className="size-3.5 text-primary" aria-hidden="true" />}</span>
+                      <span className="mt-0.5 block break-all text-xs text-muted-foreground">{item.code}</span>
                     </span>
                   </label>
                 );
@@ -60,7 +60,7 @@ export function PermissionTree({ permissions, selected, onChange }: PermissionTr
           </div>
         );
       })}
-      {!permissions.length && <div className="flex items-center gap-2 py-8 text-sm text-slate-500"><ShieldCheck className="h-4 w-4" />暂无可分配权限</div>}
+      {!permissions.length && <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><ShieldCheck className="size-4" />暂无可分配权限</div>}
     </div>
   );
 }
