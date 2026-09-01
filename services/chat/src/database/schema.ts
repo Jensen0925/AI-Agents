@@ -148,6 +148,27 @@ export const documents = pgTable(
   (table) => [index("documents_userId_createdAt_idx").on(table.userId, table.createdAt)],
 );
 
+/**
+ * 用户自建的文档分类。内置的五个分类（见 documents.category 默认值）不落这张表，
+ * 只有用户新增的分类才有记录；documents.category 既可能存内置分类 id，
+ * 也可能存这里的分类 id。
+ */
+export const categories = pgTable(
+  "categories",
+  {
+    id: text("id").primaryKey(),
+    userId: text("userId").notNull(),
+    name: text("name").notNull(),
+    createdAt: timestamp("createdAt", { precision: 3, mode: "date" })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    // 同一用户下不允许重名分类，避免侧栏出现两个同名入口。
+    uniqueIndex("categories_userId_name_key").on(table.userId, table.name),
+  ],
+);
+
 export const documentChunks = pgTable(
   "document_chunks",
   {

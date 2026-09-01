@@ -26,6 +26,8 @@ interface RawSimilarityResult {
 export interface DocumentSearchResult {
   /** 文档块主键；检索评测使用它与 golden relevantChunkIds 对齐。 */
   id?: string;
+  /** 命中片段所属文档，供前端定位来源文档（全局检索面板据此跳转预览）。 */
+  documentId?: string;
   content: string;
   score: number;
 }
@@ -106,6 +108,9 @@ export class SearchService {
       return rows
         .map((row: RawSimilarityResult) => ({
           ...(typeof row.id === "string" ? { id: row.id } : {}),
+          ...(typeof row.documentId === "string"
+            ? { documentId: row.documentId }
+            : {}),
           content: row.content,
           score: Number(row.score),
         }))
@@ -184,8 +189,9 @@ export class SearchService {
       topK,
     );
     return reranked.map(
-      ({ chunkId, documentId: _documentId, chunkIndex: _chunkIndex, ...result }) => ({
+      ({ chunkId, documentId, chunkIndex: _chunkIndex, ...result }) => ({
         id: chunkId,
+        ...(typeof documentId === "string" ? { documentId } : {}),
         ...result,
       }),
     );

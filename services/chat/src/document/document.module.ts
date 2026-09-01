@@ -3,6 +3,8 @@ import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { EmbeddingModule } from "../llm/embedding/embedding.module";
 import { SseModule } from "../sse/sse.module";
 import { ChunkService } from "./chunk.service";
+import { CategoryController } from "./category.controller";
+import { CategoryService } from "./category.service";
 import { DocumentController } from "./document.controller";
 import { DocumentService } from "./document.service";
 import { DocumentEmbeddingService } from "./embedding.service";
@@ -11,8 +13,9 @@ import { SearchService } from "./search.service";
 
 @Module({
   imports: [EmbeddingModule, SseModule],
-  controllers: [DocumentController, SearchController],
+  controllers: [DocumentController, SearchController, CategoryController],
   providers: [
+    CategoryService,
     ChunkService,
     DocumentEmbeddingService,
     DocumentService,
@@ -20,6 +23,7 @@ import { SearchService } from "./search.service";
     JwtAuthGuard,
   ],
   exports: [
+    CategoryService,
     ChunkService,
     DocumentEmbeddingService,
     DocumentService,

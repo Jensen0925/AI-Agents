@@ -12,6 +12,7 @@ import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DatabaseService } from "../database/database.service";
 import { documents, type Document } from "../database/schema";
+import { CategoryService } from "./category.service";
 import { ChunkService } from "./chunk.service";
 
 export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024;
@@ -107,7 +108,34 @@ export class DocumentService {
   constructor(
     private readonly database: DatabaseService,
     private readonly chunkService: ChunkService,
+    /**
+     * 可选依赖：只有配置了自定义分类能力（DocumentModule 提供）时才会注入。
+     * 单元测试直接构造 DocumentService 时不传，此时仅接受内置分类。
+     */
+    private readonly categoryService?: CategoryService,
   ) {}
+
+  /**
+   * 归一化分类取值：内置分类直接放行，其余值需要命中当前用户的自定义分类。
+   * 这样 documents.category 既能存内置 id，也能存 categories 表的主键。
+   */
+  private async resolveCategory(
+    userId: string,
+    category: string,
+  ): Promise<string> {
+    const normalized = category.trim();
+    if (!normalized) {
+      throw new BadRequestException("Invalid document category");
+    }
+    if (isDocumentCategoryId(normalized)) {
+      return normalized;
+    }
+    if (await this.categoryService?.belongsToUser(userId, normalized)) {
+      return normalized;
+    }
+
+    throw new BadRequestException("Invalid document category");
+  }
 
   /**
    * 校验并保存内存中的上传文件，然后创建 pending 状态的数据库记录。
@@ -122,10 +150,9 @@ export class DocumentService {
     this.validateFile(file);
     const normalizedFilename = filename || file.originalname;
     const normalizedCategory = category?.trim();
-    if (normalizedCategory && !isDocumentCategoryId(normalizedCategory)) {
-      throw new BadRequestException("Invalid document category");
-    }
-    const documentCategory = normalizedCategory ?? inferDocumentCategory(normalizedFilename);
+    const documentCategory = normalizedCategory
+      ? await this.resolveCategory(userId, normalizedCategory)
+      : inferDocumentCategory(normalizedFilename);
 
     const safeUserId = sanitizePathSegment(userId, "anonymous");
     const safeFilename = sanitizePathSegment(
@@ -181,15 +208,12 @@ export class DocumentService {
     userId: string,
     category: string,
   ): Promise<Document> {
-    const normalizedCategory = category.trim();
-    if (!isDocumentCategoryId(normalizedCategory)) {
-      throw new BadRequestException("Invalid document category");
-    }
+    const documentCategory = await this.resolveCategory(userId, category);
 
     await this.findById(documentId, userId);
     const [document] = await this.database.db
       .update(documents)
-      .set({ category: normalizedCategory })
+      .set({ category: documentCategory })
       .where(eq(documents.id, documentId))
       .returning();
     return document!;

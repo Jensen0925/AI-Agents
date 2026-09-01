@@ -28,7 +28,6 @@ import {
   ALLOWED_DOCUMENT_MIME_TYPES,
   DocumentService,
   MAX_DOCUMENT_SIZE,
-  isDocumentCategoryId,
   type UploadedDocumentFile,
 } from "./document.service";
 
@@ -85,8 +84,9 @@ export class DocumentController {
     if (filename !== undefined && typeof filename !== "string") {
       throw new BadRequestException("filename must be a string");
     }
-    if (category !== undefined && (typeof category !== "string" || !isDocumentCategoryId(category.trim()))) {
-      throw new BadRequestException("category must be a valid document category");
+    // 只做类型校验：内置分类与用户自定义分类的合法性由 DocumentService 判定。
+    if (category !== undefined && typeof category !== "string") {
+      throw new BadRequestException("category must be a string");
     }
 
     return this.documentService.upload(
@@ -103,8 +103,8 @@ export class DocumentController {
     @Param("id") documentId: string,
     @Body("category") category?: string,
   ) {
-    if (typeof category !== "string" || !isDocumentCategoryId(category.trim())) {
-      throw new BadRequestException("category must be a valid document category");
+    if (typeof category !== "string" || !category.trim()) {
+      throw new BadRequestException("category must be a non-empty string");
     }
 
     return this.documentService.updateCategory(
