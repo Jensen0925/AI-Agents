@@ -70,6 +70,7 @@ export function ArtifactPanel({
 
   const dirty = Boolean(artifact && (content !== artifact.content || title.trim() !== artifact.title))
   const sortedVersions = useMemo(
+    // eslint-disable-next-line unicorn/no-array-sort -- 对副本排序，不会修改原数组
     () => [...versions].sort((left, right) => right.version - left.version),
     [versions],
   )
@@ -212,6 +213,7 @@ export function ArtifactPanel({
       const decoder = new TextDecoder()
       let buffer = ""
       while (true) {
+        // eslint-disable-next-line no-await-in-loop -- 流式读取必须逐块 await
         const { done, value } = await reader.read()
         buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done })
         const events = buffer.split("\n\n")

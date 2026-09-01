@@ -152,7 +152,8 @@ export function buildCategories(
     items.filter((document) => document.category === id).length
 
   const builtin = categoryDefinitions.map((category) => ({
-    ...category,
+    id: category.id,
+    name: category.name,
     count: category.id === "all" ? items.length : countOf(category.id),
   }))
 

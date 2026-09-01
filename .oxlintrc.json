@@ -26,7 +26,8 @@
   "rules": {
     "no-explicit-any": "off",
     "no-empty-interface": "warn",
-    "no-unused-vars": "warn"
+    "no-unused-vars": "warn",
+    "no-underscore-dangle": ["warn", { "allow": ["_count"] }]
   },
   "overrides": [
     {

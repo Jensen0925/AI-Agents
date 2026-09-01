@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { KeyRound, Lock, Search } from "lucide-react";
+import { KeyRound, Lock } from "lucide-react";
 import { PageHeader, SearchBar, EmptyState } from "@/components/admin-primitives";
 import { Badge } from "@/components/ui/badge";
 import { api, apiErrorMessage } from "@/lib/api";

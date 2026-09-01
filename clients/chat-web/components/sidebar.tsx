@@ -114,6 +114,7 @@ export function Sidebar({
         )
 
     // 置顶会话固定排在列表顶部，同时保持服务端返回的时间顺序。
+    // eslint-disable-next-line unicorn/no-array-sort -- 对副本排序，不会修改原数组
     return [...filtered].sort(
       (left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)),
     )

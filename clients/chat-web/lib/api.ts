@@ -31,12 +31,12 @@ api.interceptors.response.use(
   (response) => response,
   async (error: AxiosError<ApiErrorPayload>) => {
     const status = error.response?.status;
-    const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
+    const original = error.config as (InternalAxiosRequestConfig & { retry?: boolean }) | undefined;
     if (status === 403 && typeof window !== "undefined") {
       window.location.assign("/forbidden");
       return Promise.reject(error);
     }
-    if (status !== 401 || !original || original._retry || original.url?.includes("/auth/refresh")) {
+    if (status !== 401 || !original || original.retry || original.url?.includes("/auth/refresh")) {
       return Promise.reject(error);
     }
     const session = getSession();
@@ -45,7 +45,7 @@ api.interceptors.response.use(
       if (typeof window !== "undefined") window.location.assign("/login");
       return Promise.reject(error);
     }
-    original._retry = true;
+    original.retry = true;
     refreshPromise ??= axios
       .post<Session>(
         "/api/auth/refresh",

@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Edit3, LoaderCircle, MoreHorizontal, Plus, UserMinus, UserPlus, Users as UsersIcon } from "lucide-react";
+import { Edit3, LoaderCircle, MoreHorizontal, Plus, UserMinus, Users as UsersIcon } from "lucide-react";
 import { PageHeader, Pagination, SearchBar, StatusMessage, EmptyState } from "@/components/admin-primitives";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, apiErrorMessage } from "@/lib/api";
 import { isDemoSession } from "@/lib/auth";
-import { MOCK_ROLES, MOCK_USERS, type RoleRow, type UserRow, type UserStatus } from "@/lib/mock-data";
+import { MOCK_ROLES, MOCK_USERS, type RoleRow, type UserRow } from "@/lib/mock-data";
 
 const PAGE_SIZE = 8;
 const dateFormatter = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "short", day: "numeric" });
