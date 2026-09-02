@@ -9,7 +9,7 @@ import {
 } from "@nestjs/common";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { DatabaseService } from "../database/database.service";
 import { documents, type Document } from "../database/schema";
 import { CategoryService } from "./category.service";
@@ -60,6 +60,30 @@ export const ALLOWED_DOCUMENT_MIME_TYPES = new Set([
   "application/msword",
 ]);
 
+/** 对话附件在文档类型之外额外允许常见图片，便于随消息发送截图。 */
+export const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
+  ...ALLOWED_DOCUMENT_MIME_TYPES,
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+  "image/svg+xml",
+  "image/heic",
+]);
+
+export const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+
+/** 对话附件的落盘结果；id 即相对 uploads 根目录的路径，用于回读。 */
+export interface AttachmentRecord {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  /** 前端可直接使用的回读地址。 */
+  url: string;
+}
+
 export interface UploadedDocumentFile {
   buffer: Buffer;
   mimetype: string;
@@ -91,6 +115,30 @@ function sanitizePathSegment(value: string, fallback: string): string {
     .slice(0, 180);
 
   return sanitized || fallback;
+}
+
+/** 附件不在 documents 表里存 mimeType，回读时按扩展名推导 Content-Type。 */
+const ATTACHMENT_EXTENSION_MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".heic": "image/heic",
+  ".pdf": "application/pdf",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".docx":
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".doc": "application/msword",
+};
+
+function guessAttachmentMimeType(filePath: string): string {
+  return (
+    ATTACHMENT_EXTENSION_MIME_TYPES[extname(filePath).toLowerCase()] ??
+    "application/octet-stream"
+  );
 }
 
 /**
@@ -190,6 +238,97 @@ export class DocumentService {
     } catch (error) {
       await unlink(absolutePath).catch(() => undefined);
       throw error;
+    }
+  }
+
+  /**
+   * 保存对话附件：只落盘，不写 documents 表，避免附件污染知识库与检索语料。
+   * 文件统一放在 uploads/attachments/<userId>/ 下；id 即相对 uploads 的路径，
+   * 回读时经 resolveInsideUploadRoot 校验，保证不会越出 uploads 目录。
+   */
+  async uploadAttachment(
+    userId: string,
+    file: UploadedDocumentFile,
+    filename?: string,
+  ): Promise<AttachmentRecord> {
+    if (!file?.buffer || !Buffer.isBuffer(file.buffer)) {
+      throw new BadRequestException("A file is required");
+    }
+    if (!ALLOWED_ATTACHMENT_MIME_TYPES.has(file.mimetype)) {
+      throw new UnsupportedMediaTypeException(
+        `Unsupported attachment type: ${file.mimetype}`,
+      );
+    }
+    if (file.size <= 0) {
+      throw new BadRequestException("Attachment must not be empty");
+    }
+    if (
+      file.size > MAX_ATTACHMENT_SIZE ||
+      file.buffer.length > MAX_ATTACHMENT_SIZE
+    ) {
+      throw new BadRequestException("Attachment size must not exceed 10MB");
+    }
+
+    const safeUserId = sanitizePathSegment(userId, "anonymous");
+    const safeFilename = sanitizePathSegment(
+      filename || file.originalname,
+      "attachment",
+    );
+    const directory = this.resolveInsideUploadRoot("attachments", safeUserId);
+    // 加 6 位随机后缀：同一毫秒上传同名文件不会因 wx 标志抛 EEXIST。
+    const storedFilename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeFilename}`;
+    const absolutePath = this.resolveInsideUploadRoot(
+      "attachments",
+      safeUserId,
+      storedFilename,
+    );
+
+    await mkdir(directory, { recursive: true });
+    await writeFile(absolutePath, file.buffer, { flag: "wx" });
+
+    const id = relative(this.uploadRoot, absolutePath);
+    return {
+      id,
+      filename: safeFilename,
+      mimeType: file.mimetype,
+      size: file.size,
+      url: `/api/attachments/${encodeURIComponent(id)}/raw`,
+    };
+  }
+
+  /** 读取当前用户自己上传的对话附件，同时校验归属目录。 */
+  async getAttachment(userId: string, id: string): Promise<DocumentPreview> {
+    if (typeof id !== "string" || id.trim().length === 0) {
+      throw new BadRequestException("attachment id must be a non-empty string");
+    }
+
+    const safeUserId = sanitizePathSegment(userId, "anonymous");
+    const ownerRoot = this.resolveInsideUploadRoot("attachments", safeUserId);
+    let absolutePath: string;
+    try {
+      absolutePath = this.resolveInsideUploadRoot(id.trim());
+    } catch {
+      throw new NotFoundException("Attachment not found");
+    }
+    if (
+      absolutePath !== ownerRoot &&
+      !absolutePath.startsWith(`${ownerRoot}${sep}`)
+    ) {
+      throw new NotFoundException("Attachment not found");
+    }
+
+    try {
+      const buffer = await readFile(absolutePath);
+      const storedName = basename(absolutePath);
+      return {
+        buffer,
+        // 去掉上传时加的「时间戳-随机串」前缀，下载时拿回原始文件名。
+        filename: storedName.replace(/^\d+-[0-9a-z]{6}-/, "") || storedName,
+        mimeType: guessAttachmentMimeType(absolutePath),
+        size: buffer.length,
+      };
+    } catch {
+      throw new NotFoundException("Attachment not found");
     }
   }
 

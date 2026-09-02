@@ -26,6 +26,8 @@ import { uiActionSchema } from "../llm/ui-protocol/ui-schemas";
 import type { AIUIResponse, UIAction } from "../llm/ui-protocol/ui-types";
 import { isUiRequirementFlowStart } from "../llm/conversation-route";
 import { MessageService } from "../message/message.service";
+import { type AttachmentRecord } from "../document/document.service";
+import { type RetrievalScope, parseScope } from "../document/search.service";
 import { ConversationService } from "./conversation.service";
 
 interface CreateConversationBody {
@@ -34,6 +36,8 @@ interface CreateConversationBody {
 
 interface ChatBody {
   input: string;
+  scope?: RetrievalScope;
+  attachments?: AttachmentRecord[];
 }
 
 interface RenameConversationBody {
@@ -64,6 +68,64 @@ function requireText(
   }
 
   return value.trim();
+}
+
+/** 单条消息最多携带的附件数，防止 metadata 被塞入超大数组。 */
+const MAX_CHAT_ATTACHMENTS = 10;
+
+/**
+ * 校验并归一化随消息提交的附件引用。
+ * 附件只是展示用的引用（不进入模型上下文），因此只校验字段形状与数量，
+ * 不校验文件是否仍存在——历史消息里已删除的文件仍应能正常显示条目。
+ */
+function parseAttachments(value: unknown): AttachmentRecord[] | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new BadRequestException("attachments must be an array");
+  }
+  if (value.length > MAX_CHAT_ATTACHMENTS) {
+    throw new BadRequestException(
+      `attachments must not exceed ${MAX_CHAT_ATTACHMENTS} items`,
+    );
+  }
+
+  const parsed: AttachmentRecord[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new BadRequestException("attachment must be an object");
+    }
+
+    const { id, filename, mimeType, size, url } = item as Record<
+      string,
+      unknown
+    >;
+    if (
+      typeof id !== "string" ||
+      !id.trim() ||
+      typeof filename !== "string" ||
+      !filename.trim() ||
+      typeof url !== "string" ||
+      !url.trim() ||
+      typeof mimeType !== "string" ||
+      typeof size !== "number" ||
+      !Number.isFinite(size) ||
+      size < 0
+    ) {
+      throw new BadRequestException("attachment fields are invalid");
+    }
+
+    parsed.push({
+      id: id.trim(),
+      filename: filename.trim().slice(0, 200),
+      mimeType: mimeType.trim().slice(0, 200),
+      size,
+      url: url.trim().slice(0, 500),
+    });
+  }
+
+  return parsed.length > 0 ? parsed : undefined;
 }
 
 function currentUserId(request: AuthenticatedRequest): string {
@@ -167,10 +229,13 @@ export class ConversationController {
       conversationId,
       userId,
     );
+    const attachments = parseAttachments(body?.attachments);
     return this.advancedAnalysisService.analyze(
       userId,
       conversationId,
       requireText(body?.input, "input"),
+      parseScope(body?.scope),
+      attachments,
     );
   }
 

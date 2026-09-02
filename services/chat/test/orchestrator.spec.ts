@@ -235,7 +235,8 @@ describe("AdvancedAnalysisService", () => {
     expect(runAnalysisGraph.mock.calls[0]?.[0]).toBe(input);
     expect(runAnalysisGraph.mock.calls[0]?.[1]).toContain("REQ-2026-001");
     expect(runAnalysisGraph.mock.calls[0]?.[1]).toContain("需求必须支持上下文裁剪");
-    expect(search).toHaveBeenCalledWith(input, "user-1", 3);
+    // 第四个参数是可选的检索范围，未指定时透传 undefined（等价于「全部文档」）。
+    expect(search).toHaveBeenCalledWith(input, "user-1", 3, undefined);
     expect(addMessage.mock.calls.map((call) => call.slice(0, 3))).toEqual([
       ["conversation-1", MessageRole.USER, input],
       [

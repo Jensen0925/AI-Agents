@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { EmbeddingModule } from "../llm/embedding/embedding.module";
 import { SseModule } from "../sse/sse.module";
+import { AttachmentController } from "./attachment.controller";
 import { ChunkService } from "./chunk.service";
 import { CategoryController } from "./category.controller";
 import { CategoryService } from "./category.service";
@@ -13,7 +14,12 @@ import { SearchService } from "./search.service";
 
 @Module({
   imports: [EmbeddingModule, SseModule],
-  controllers: [DocumentController, SearchController, CategoryController],
+  controllers: [
+    AttachmentController,
+    DocumentController,
+    SearchController,
+    CategoryController,
+  ],
   providers: [
     CategoryService,
     ChunkService,

@@ -3,7 +3,7 @@ import {
   Injectable,
   Logger,
 } from "@nestjs/common";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, type SQL } from "drizzle-orm";
 import { DatabaseService } from "../database/database.service";
 import { documentChunks, documents } from "../database/schema";
 import { loadLangchainConfig } from "../config/load-langchain-config";
@@ -32,6 +32,86 @@ export interface DocumentSearchResult {
   score: number;
 }
 
+export type RetrievalScope =
+  | { mode: "all" }
+  | { mode: "category"; value: string }
+  | { mode: "documents"; ids: string[] };
+
+/** 一次检索可限定的文档数量上限，防止 IN (...) 条件被撑爆。 */
+export const MAX_SCOPE_DOCUMENTS = 50;
+
+/**
+ * 校验并归一化外部传入的检索范围。非法结构直接抛 400，
+ * 避免下游 scopeCondition 拿到畸形 scope 时抛 TypeError 退化成 500。
+ */
+export function parseScope(value: unknown): RetrievalScope | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new BadRequestException("scope must be an object");
+  }
+
+  const mode = (value as { mode?: unknown }).mode;
+  if (mode === "all") {
+    return { mode: "all" };
+  }
+  if (mode === "category") {
+    const raw = (value as { value?: unknown }).value;
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+      throw new BadRequestException("scope.value must be a non-empty string");
+    }
+    return { mode: "category", value: raw.trim().slice(0, 100) };
+  }
+  if (mode === "documents") {
+    const raw = (value as { ids?: unknown }).ids;
+    if (!Array.isArray(raw)) {
+      throw new BadRequestException("scope.ids must be an array");
+    }
+    if (raw.length > MAX_SCOPE_DOCUMENTS) {
+      throw new BadRequestException(
+        `scope.ids must not exceed ${MAX_SCOPE_DOCUMENTS} items`,
+      );
+    }
+    return {
+      mode: "documents",
+      ids: raw
+        .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+        .map((id) => id.trim().slice(0, 100)),
+    };
+  }
+
+  throw new BadRequestException(
+    "scope.mode must be one of all, category, documents",
+  );
+}
+
+/**
+ * 将「仅当前用户」过滤与可选的检索范围合并为单一 SQL 条件。
+ * - all：仅按 userId 过滤（默认行为）。
+ * - category：再限定 documents.category。
+ * - documents：再限定 documents.id IN (...)，空列表视为无结果。
+ * userId 过滤始终保留，确保不会越权读到其他用户的文档块。
+ */
+function scopeCondition(scope: RetrievalScope | undefined, userId: string): SQL {
+  const userFilter = sql`documents."userId" = ${userId}`;
+  if (!scope || scope.mode === "all") {
+    return userFilter;
+  }
+  if (scope.mode === "category") {
+    return sql`${userFilter} AND documents."category" = ${scope.value}`;
+  }
+  // 内部调用路径同样做一次兜底，避免畸形 ids 让 SQL 构造抛异常。
+  const ids = Array.isArray(scope.ids)
+    ? scope.ids.filter((id) => typeof id === "string" && id.length > 0)
+    : [];
+  if (ids.length === 0) {
+    return sql`${userFilter} AND 1 = 0`;
+  }
+  const idList = sql.join(ids.map((id) => sql`${id}`), sql`, `);
+  return sql`${userFilter} AND documents."id" IN (${idList})`;
+}
+
 /** BM25 关键词召回最多读取的用户文档块数，防止一次请求无界扫描。 */
 const BM25_CORPUS_CAP = 500;
 const DEFAULT_RETRIEVAL_TIMEOUT_MS = 8_000;
@@ -54,6 +134,7 @@ export class SearchService {
     query: string,
     userId: string,
     topK: number,
+    scope?: RetrievalScope,
   ): Promise<DocumentSearchResult[]> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
@@ -72,7 +153,7 @@ export class SearchService {
         .select({ id: documents.id })
         .from(documents)
         .innerJoin(documentChunks, eq(documentChunks.documentId, documents.id))
-        .where(eq(documents.userId, userId))
+        .where(scopeCondition(scope, userId))
         .limit(1);
       if (!documentWithChunks) {
         return [];
@@ -97,7 +178,7 @@ export class SearchService {
         FROM "document_chunks" AS chunks
         INNER JOIN "documents" AS documents
           ON documents."id" = chunks."documentId"
-        WHERE documents."userId" = ${userId}
+        WHERE ${scopeCondition(scope, userId)}
         ORDER BY chunks."embedding" <=> ${vectorLiteral}::vector
         LIMIT ${limit}
       `,
@@ -135,6 +216,7 @@ export class SearchService {
     query: string,
     userId: string,
     topK: number,
+    scope?: RetrievalScope,
   ): Promise<DocumentSearchResult[]> {
     let config: ReturnType<typeof loadLangchainConfig>["retrieval"];
     try {
@@ -151,7 +233,7 @@ export class SearchService {
     const timeoutMs = config.timeoutMs ?? DEFAULT_RETRIEVAL_TIMEOUT_MS;
     try {
       return await this.withTimeout(
-        this.runSearch(query, userId, topK, config.mode),
+        this.runSearch(query, userId, topK, config.mode, scope),
         timeoutMs,
       );
     } catch (error) {
@@ -169,16 +251,17 @@ export class SearchService {
     userId: string,
     topK: number,
     mode: "simple" | "hybrid",
+    scope?: RetrievalScope,
   ): Promise<DocumentSearchResult[]> {
     if (mode === "simple") {
-      return this.similaritySearch(query, userId, topK);
+      return this.similaritySearch(query, userId, topK, scope);
     }
 
     const wideK = Math.max(1, Math.floor(topK)) * 3;
     const vectorSearch = async (): Promise<RetrievalResult[]> =>
-      this.toRetrievalResults(await this.similaritySearch(query, userId, wideK));
+      this.toRetrievalResults(await this.similaritySearch(query, userId, wideK, scope));
     const keywordSearch = async (): Promise<RetrievalResult[]> =>
-      bm25Search(query, await this.fetchUserChunks(userId), wideK);
+      bm25Search(query, await this.fetchUserChunks(userId, scope), wideK);
     const candidates = await hybridSearch(query, vectorSearch, keywordSearch, wideK);
     if (candidates.length === 0) return [];
 
@@ -197,7 +280,10 @@ export class SearchService {
     );
   }
 
-  private async fetchUserChunks(userId: string): Promise<RetrievalResult[]> {
+  private async fetchUserChunks(
+    userId: string,
+    scope?: RetrievalScope,
+  ): Promise<RetrievalResult[]> {
     const rows = (await this.database.db.execute(
       sql<RawSimilarityResult>`
       SELECT
@@ -209,7 +295,7 @@ export class SearchService {
       FROM "document_chunks" AS chunks
       INNER JOIN "documents" AS documents
         ON documents."id" = chunks."documentId"
-      WHERE documents."userId" = ${userId}
+      WHERE ${scopeCondition(scope, userId)}
       LIMIT ${BM25_CORPUS_CAP}
     `,
     )) as unknown as RawSimilarityResult[];

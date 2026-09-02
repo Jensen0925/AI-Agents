@@ -6,8 +6,10 @@ import {
   SystemMessage,
 } from "@langchain/core/messages";
 import { Injectable, Logger } from "@nestjs/common";
+import { type AttachmentRecord } from "../document/document.service";
 import {
   type DocumentSearchResult,
+  type RetrievalScope,
   SearchService,
 } from "../document/search.service";
 import { loadLangchainConfig } from "../config/load-langchain-config";
@@ -815,9 +817,17 @@ export class AdvancedAnalysisService {
     userId: string,
     conversationId: string,
     input: string,
+    scope?: RetrievalScope,
+    attachments?: AttachmentRecord[],
   ): Promise<AdvancedAnalysisResult> {
     try {
-      return await this.analyzeInternal(userId, conversationId, input);
+      return await this.analyzeInternal(
+        userId,
+        conversationId,
+        input,
+        scope,
+        attachments,
+      );
     } catch (error) {
       // 这是最后一道边界保护：即使出现未预期的同步异常、第三方返回格式
       // 变化或 Nest 序列化前的 TypeError，聊天接口也必须返回稳定 JSON，不能
@@ -852,6 +862,8 @@ export class AdvancedAnalysisService {
     userId: string,
     conversationId: string,
     input: string,
+    scope?: RetrievalScope,
+    attachments?: AttachmentRecord[],
   ): Promise<AdvancedAnalysisResult> {
     const normalizedInput = input.trim();
     if (!normalizedInput) {
@@ -893,7 +905,16 @@ export class AdvancedAnalysisService {
     // 也能立即看到用户刚发送的内容；assistant 结果仍在流程结束后写入。
     try {
       await withDeadline(
-        chatHistory.addMessage(new HumanMessage(normalizedInput)),
+        chatHistory.addMessage(
+          new HumanMessage({
+            content: normalizedInput,
+            // 附件只作为展示用的引用写进 metadata（经 additional_kwargs 落库），
+            // 不进入模型上下文，避免把文件信息当事实喂给 LLM。
+            ...(attachments?.length
+              ? { additional_kwargs: { attachments } }
+              : {}),
+          }),
+        ),
         Math.min(3_000, this.retrievalTimeoutMs),
       );
     } catch (error) {
@@ -1050,6 +1071,7 @@ export class AdvancedAnalysisService {
             normalizedInput,
             userId,
             Math.max(1, Math.floor(retrieval.topK)),
+            scope,
           ),
           this.retrievalTimeoutMs,
         );

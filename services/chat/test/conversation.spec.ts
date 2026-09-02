@@ -70,10 +70,13 @@ describe("ConversationController", () => {
     );
 
     expect(findById).toHaveBeenCalledWith("conversation-1", "user-1");
+    // 后两个参数为可选的检索范围与附件引用，未传时按 undefined 透传给分析服务。
     expect(analyze).toHaveBeenCalledWith(
       "user-1",
       "conversation-1",
       "分析这个需求",
+      undefined,
+      undefined,
     );
     expect(result.report).toBe("需求分析报告");
   });

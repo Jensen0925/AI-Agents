@@ -12,12 +12,15 @@ import {
 } from "../auth/jwt-auth.guard";
 import {
   type DocumentSearchResult,
+  parseScope,
+  type RetrievalScope,
   SearchService,
 } from "./search.service";
 
 interface SearchBody {
   query: string;
   topK: number;
+  scope?: RetrievalScope;
 }
 
 const MAX_QUERY_LENGTH = 20_000;
@@ -61,6 +64,7 @@ export class SearchController {
       body.query.trim(),
       currentUserId(request),
       Math.min(MAX_TOP_K, Math.floor(body.topK)),
+      parseScope(body.scope),
     );
   }
 }
