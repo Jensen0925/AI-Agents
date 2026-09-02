@@ -83,7 +83,7 @@ export function inferDocumentCategory(filename: string): DocumentCategoryId {
   return "product"
 }
 
-function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
@@ -288,11 +288,35 @@ export type Citation = {
   snippet: string
 }
 
+/**
+ * 对话附件引用。附件由 /api/attachments 上传后只落盘、不写入 documents 表，
+ * 因此不会污染知识库与检索语料；引用随消息 metadata 持久化。
+ */
+export type Attachment = {
+  id: string
+  filename: string
+  mimeType: string
+  size: number
+  url: string
+}
+
+/**
+ * 会话级检索范围，与后端 RetrievalScope 一一对应：
+ * - all：当前用户全部已索引文档
+ * - category：限定某个分类
+ * - documents：限定若干篇指定文档
+ */
+export type ChatScope =
+  | { mode: "all" }
+  | { mode: "category"; value: string }
+  | { mode: "documents"; ids: string[] }
+
 export type ChatMessage = {
   id: string
   role: "user" | "assistant"
   content: string
   citations?: Citation[]
+  attachments?: Attachment[]
 }
 
 export const initialMessages: ChatMessage[] = [

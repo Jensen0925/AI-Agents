@@ -4,11 +4,20 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 
 import { api, apiErrorMessage } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { isDemoSession } from "@/lib/auth"
-import { suggestedQuestions, type ChatMessage } from "@/lib/knowledge-data"
+import {
+  formatBytes,
+  suggestedQuestions,
+  type Attachment,
+  type ChatMessage,
+  type ChatScope,
+  type KnowledgeDoc,
+} from "@/lib/knowledge-data"
+import { MAX_CHAT_ATTACHMENTS, openAttachment, uploadAttachment } from "@/lib/attachments"
 import { Button } from "@/components/ui/button"
 import { ComponentRenderer } from "@/components/ai-ui/ComponentRenderer"
+import { ChatScopePicker, describeScope, type ScopeOption } from "@/components/chat-scope-picker"
 import type { AIUIResponse, UIAction, UIResponse } from "@/types/ui-types"
-import { ArrowUp, FileText, Loader2, NotebookPen, Sparkles, User } from "lucide-react"
+import { ArrowUp, FileText, Loader2, NotebookPen, Paperclip, Sparkles, User, X } from "lucide-react"
 import { ArtifactPanel } from "@/components/artifact-panel"
 
 type Conversation = {
@@ -57,6 +66,10 @@ type ChatViewProps = {
   newConversationSignal?: number
   onConversationsChange?: Dispatch<SetStateAction<Conversation[]>>
   onActiveConversationChange?: (id: string | null) => void
+  /** 知识库文档，用于「指定文档」检索范围选择。 */
+  documents?: KnowledgeDoc[]
+  /** 分类选项（内置 + 用户自建），用于「按分类」检索范围选择。 */
+  categoryOptions?: ScopeOption[]
 }
 
 const DEMO_CONVERSATION: Conversation = {
@@ -97,7 +110,33 @@ function toChatMessage(message: ApiMessage): RenderableChatMessage {
     role: message.role === "USER" || message.role === "user" ? "user" : "assistant",
     content: typeof message.content === "string" ? message.content : JSON.stringify(message.content),
     components: uiComponentsFromMetadata(message.metadata),
+    attachments: attachmentsFromMetadata(message.metadata),
   }
+}
+
+/**
+ * 用户消息的附件引用由 LangChain 的 additional_kwargs 透传，
+ * 最终落在 messages.metadata 中。只做结构校验，脏数据退化为「无附件」。
+ */
+function attachmentsFromMetadata(metadata: unknown): Attachment[] | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined
+  }
+  const kwargs = (metadata as { additional_kwargs?: unknown }).additional_kwargs
+  if (!kwargs || typeof kwargs !== "object" || Array.isArray(kwargs)) {
+    return undefined
+  }
+  const attachments = (kwargs as { attachments?: unknown }).attachments
+  if (!Array.isArray(attachments)) return undefined
+  const records = attachments.filter(
+    (item): item is Attachment =>
+      !!item &&
+      typeof item === "object" &&
+      typeof (item as Attachment).id === "string" &&
+      typeof (item as Attachment).url === "string" &&
+      typeof (item as Attachment).filename === "string",
+  )
+  return records.length > 0 ? records : undefined
 }
 
 /**
@@ -146,17 +185,24 @@ export function ChatView({
   newConversationSignal = 0,
   onConversationsChange,
   onActiveConversationChange,
+  documents = [],
+  categoryOptions = [],
 }: ChatViewProps) {
   const [messages, setMessages] = useState<RenderableChatMessage[]>([])
   const [input, setInput] = useState("")
   const [thinking, setThinking] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  // 检索范围按会话保持：同一会话内追问默认沿用上次的范围，切换或新建会话时重置。
+  const [scope, setScope] = useState<ChatScope>({ mode: "all" })
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [uploadingAttachments, setUploadingAttachments] = useState(false)
   const [conversation, setConversation] = useState<Conversation | null>(null)
   const [artifactOpen, setArtifactOpen] = useState(false)
   const [hasArtifact, setHasArtifact] = useState(false)
   const [artifactRefreshKey, setArtifactRefreshKey] = useState(0)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const handledNewSignalRef = useRef(0)
   const newConversationModeRef = useRef(false)
   // 每次切换/新建会话都会递增。旧会话的异步请求完成后必须先校验代次，
@@ -184,6 +230,8 @@ export function ChatView({
       setArtifactOpen(false)
       setHasArtifact(false)
       setInput("")
+      setAttachments([])
+      setScope({ mode: "all" })
       setError("")
       setThinking(false)
       setLoading(false)
@@ -214,6 +262,8 @@ export function ChatView({
       setMessages([])
       setArtifactOpen(false)
       setHasArtifact(false)
+      setAttachments([])
+      setScope({ mode: "all" })
       setThinking(false)
       setLoading(true)
       setError("")
@@ -296,13 +346,17 @@ export function ChatView({
     const activeConversation = await ensureConversation()
     if (!activeConversation) return
     const epoch = conversationEpochRef.current
+    // 附件在发送瞬间快照：请求失败时要把它们放回输入框，不能丢。
+    const pendingAttachments = attachments
     const userMessage: RenderableChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content,
+      ...(pendingAttachments.length > 0 ? { attachments: pendingAttachments } : {}),
     }
     setMessages((current) => [...current, userMessage])
     setInput("")
+    setAttachments([])
     setError("")
     setThinking(true)
     try {
@@ -317,7 +371,8 @@ export function ChatView({
         : (
             await api.post<AnalysisResponse>(
               `/conversations/${activeConversation.id}/chat`,
-              { input: content },
+              // 检索范围只约束知识库召回；UI Flow 走的是确定性状态机，不消费 scope/attachments。
+              { input: content, scope, attachments: pendingAttachments },
               // 多 Agent 分析可能需要多次模型调用，不能沿用初始化接口的短超时。
               { timeout: 120_000 },
             )
@@ -356,9 +411,43 @@ export function ChatView({
         return [updated, ...current.filter((item) => item.id !== updated.id)]
       })
     } catch (reason) {
-      if (conversationEpochRef.current === epoch) setError(apiErrorMessage(reason))
+      if (conversationEpochRef.current === epoch) {
+        setError(apiErrorMessage(reason))
+        // 发送失败时回滚乐观插入：文本与附件退回输入框，避免留下一条没有回复的用户消息。
+        setMessages((current) => current.filter((item) => item.id !== userMessage.id))
+        setInput(content)
+        setAttachments(pendingAttachments)
+      }
     } finally {
       if (conversationEpochRef.current === epoch) setThinking(false)
+    }
+  }
+
+  /** 打开附件原文。接口带鉴权，失败信息统一展示在会话错误条里。 */
+  function openAttachmentSafely(attachment: Attachment) {
+    void openAttachment(attachment).catch((reason) => setError(apiErrorMessage(reason)))
+  }
+
+  /** 选择本地文件后立即上传，成功后作为待发送附件挂在输入框里。 */
+  async function handleAttachmentFiles(files: FileList | null) {
+    if (!files || files.length === 0) return
+    const remaining = MAX_CHAT_ATTACHMENTS - attachments.length
+    if (remaining <= 0) {
+      setError(`单条消息最多只能携带 ${MAX_CHAT_ATTACHMENTS} 个附件`)
+      return
+    }
+    const accepted = Array.from(files).slice(0, remaining)
+    setError("")
+    setUploadingAttachments(true)
+    try {
+      const uploaded = await Promise.all(accepted.map((file) => uploadAttachment(file)))
+      setAttachments((current) => [...current, ...uploaded])
+    } catch (reason) {
+      setError(apiErrorMessage(reason))
+    } finally {
+      setUploadingAttachments(false)
+      // 清空 value，允许用户重复选择同一个文件。
+      if (fileInputRef.current) fileInputRef.current.value = ""
     }
   }
 
@@ -431,7 +520,12 @@ export function ChatView({
         ) : (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-8">
             {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} onAction={handleUiAction} />
+              <MessageBubble
+                key={message.id}
+                message={message}
+                onAction={handleUiAction}
+                onOpenAttachment={openAttachmentSafely}
+              />
             ))}
             {!hasMessages && !thinking && (
               <div className="flex min-h-[min(58vh,520px)] flex-col items-center justify-center gap-6 py-10 text-center">
@@ -472,26 +566,74 @@ export function ChatView({
 
       <div className="border-t border-border bg-background px-6 py-4">
         <div className="mx-auto w-full max-w-3xl">
-          <div className="flex items-end gap-2 rounded-2xl border border-input bg-card p-2 shadow-sm transition-shadow focus-within:border-ring focus-within:shadow-md focus-within:ring-3 focus-within:ring-ring/20">
-            <textarea
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={handleKeyDown}
-              rows={1}
-              placeholder="向知识库提问，例如：新员工的入职流程是什么？"
-              className="pretty-scroll max-h-40 min-h-9 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
-            />
-            <Button
-              size="icon"
-              className="rounded-xl shadow-sm shadow-primary/25 transition-transform active:scale-95"
-              onClick={() => void send(input)}
-              disabled={!input.trim() || thinking || loading}
-              aria-label="发送"
-            >
-              {thinking ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
-            </Button>
+          <div className="rounded-2xl border border-input bg-card p-2 shadow-sm transition-shadow focus-within:border-ring focus-within:shadow-md focus-within:ring-3 focus-within:ring-ring/20">
+            {attachments.length > 0 && (
+              <AttachmentList
+                attachments={attachments}
+                className="px-1 pb-2 pt-0.5"
+                onOpen={openAttachmentSafely}
+                onRemove={(id) =>
+                  setAttachments((current) => current.filter((item) => item.id !== id))
+                }
+              />
+            )}
+            <div className="flex items-end gap-1.5">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(event) => void handleAttachmentFiles(event.target.files)}
+              />
+              <button
+                type="button"
+                aria-label="添加附件"
+                title={
+                  attachments.length >= MAX_CHAT_ATTACHMENTS
+                    ? `最多 ${MAX_CHAT_ATTACHMENTS} 个附件`
+                    : "添加附件（不进入知识库）"
+                }
+                disabled={loading || attachments.length >= MAX_CHAT_ATTACHMENTS}
+                onClick={() => fileInputRef.current?.click()}
+                className="flex size-9 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {uploadingAttachments ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Paperclip className="size-4" />
+                )}
+              </button>
+              <ChatScopePicker
+                scope={scope}
+                onChange={setScope}
+                documents={documents}
+                categoryOptions={categoryOptions}
+                disabled={loading}
+              />
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={handleKeyDown}
+                rows={1}
+                placeholder="向知识库提问，例如：新员工的入职流程是什么？"
+                className="pretty-scroll max-h-40 min-h-9 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              />
+              <Button
+                size="icon"
+                className="rounded-xl shadow-sm shadow-primary/25 transition-transform active:scale-95"
+                onClick={() => void send(input)}
+                disabled={!input.trim() || thinking || loading}
+                aria-label="发送"
+              >
+                {thinking ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
+              </Button>
+            </div>
           </div>
-          <p className="mt-2 text-center text-xs text-muted-foreground">AI 回答可能存在偏差，请结合引用来源核实</p>
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            {scope.mode === "all"
+              ? "AI 回答可能存在偏差，请结合引用来源核实"
+              : `检索范围：${describeScope(scope, documents, categoryOptions)} · AI 回答可能存在偏差，请结合引用来源核实`}
+          </p>
         </div>
       </div>
 
@@ -514,12 +656,62 @@ export function ChatView({
   )
 }
 
+/**
+ * 附件条目列表。输入框内传入 onRemove 可移除待发送附件；
+ * 历史消息里只展示，点击走带鉴权的 blob 预览。
+ */
+function AttachmentList({
+  attachments,
+  onRemove,
+  onOpen,
+  className,
+}: {
+  attachments: Attachment[]
+  onRemove?: (id: string) => void
+  onOpen: (attachment: Attachment) => void
+  className?: string
+}) {
+  return (
+    <div className={cn("flex flex-wrap gap-2", className)}>
+      {attachments.map((attachment) => (
+        <span
+          key={attachment.id}
+          className="flex max-w-[16rem] items-center gap-1.5 rounded-xl border border-border bg-secondary/60 py-1 pl-2 pr-1 text-xs text-foreground"
+        >
+          <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+          <button
+            type="button"
+            onClick={() => onOpen(attachment)}
+            title={`${attachment.filename}（${formatBytes(attachment.size)}）`}
+            className="min-w-0 truncate hover:underline"
+          >
+            {attachment.filename}
+          </button>
+          <span className="shrink-0 text-muted-foreground">{formatBytes(attachment.size)}</span>
+          {onRemove && (
+            <button
+              type="button"
+              onClick={() => onRemove(attachment.id)}
+              aria-label={`移除附件 ${attachment.filename}`}
+              className="shrink-0 rounded-md p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <X className="size-3" />
+            </button>
+          )}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function MessageBubble({
   message,
   onAction,
+  onOpenAttachment,
 }: {
   message: RenderableChatMessage
   onAction: (action: UIAction) => void
+  onOpenAttachment: (attachment: Attachment) => void
 }) {
   const isUser = message.role === "user"
   return (
@@ -533,6 +725,13 @@ function MessageBubble({
         <div className={cn("whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-relaxed", isUser ? "rounded-br-md bg-gradient-to-br from-primary to-primary/85 text-primary-foreground shadow-sm shadow-primary/20" : "rounded-bl-md border border-border bg-card text-foreground shadow-sm")}>
           {message.content}
         </div>
+        {message.attachments && message.attachments.length > 0 && (
+          <AttachmentList
+            attachments={message.attachments}
+            onOpen={onOpenAttachment}
+            className={cn(isUser && "justify-end")}
+          />
+        )}
         {!isUser && message.components && message.components.length > 0 && (
           <div className="w-full space-y-3">
             {message.components.map((component, index) => (

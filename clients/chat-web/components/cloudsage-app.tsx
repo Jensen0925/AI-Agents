@@ -439,6 +439,8 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
             newConversationSignal={newConversationSignal}
             onConversationsChange={setConversations}
             onActiveConversationChange={handleActiveConversationChange}
+            documents={documents}
+            categoryOptions={categoryOptions}
           />
         )}
       </div>
