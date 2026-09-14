@@ -1,8 +1,8 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { FileText, History, Loader2, Pencil, RotateCcw, Save, Sparkles } from "lucide-react"
-import { api, apiErrorMessage } from "@/lib/api"
+import { api, apiErrorMessage, refreshAccessTokenOnce } from "@/lib/api"
 import { getSession } from "@/lib/auth"
 import { Button } from "@/components/ui/button"
 import { ConfirmDialog } from "@/components/ui/confirm-dialog"
@@ -43,6 +43,65 @@ type ArtifactPanelProps = {
   onTitleChange?: (title: string) => void
 }
 
+/** 流式优化返回的 SSE data 帧；解析失败时返回 null 而不是抛出。 */
+type OptimizeStreamPayload = {
+  type?: string
+  content?: string
+  message?: string
+}
+
+function parseStreamPayload(raw: string): OptimizeStreamPayload | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    return parsed && typeof parsed === "object"
+      ? (parsed as OptimizeStreamPayload)
+      : null
+  } catch {
+    // 单个畸形帧不应该中断整个流；丢掉它继续读下一帧。
+    return null
+  }
+}
+
+/**
+ * 发起需要鉴权的流式请求。
+ *
+ * 流式响应必须用 `fetch`（axios 拿不到 reader），因此绕过了拦截器；
+ * 这里补上拦截器提供的两件事：401 时单飞刷新一次并重试、以及在 4xx/5xx
+ * 时给出可读错误。注意 `response.body` 一旦被读取就不能重试，所以只在
+ * 拿到响应头、尚未消费 body 时根据 401 重试。
+ */
+async function openArtifactStream(
+  url: string,
+  body: unknown,
+  signal: AbortSignal,
+): Promise<Response> {
+  const attempt = async (): Promise<Response> => {
+    const session = getSession()
+    const token =
+      session?.accessToken && session.accessToken !== "demo"
+        ? session.accessToken
+        : undefined
+    return fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal,
+    })
+  }
+
+  let response = await attempt()
+  if (response.status === 401) {
+    const refreshed = await refreshAccessTokenOnce()
+    if (refreshed?.accessToken) {
+      response = await attempt()
+    }
+  }
+  return response
+}
+
 /**
  * 会话报告的轻量工作区。它只依赖现有 REST API：查看、人工编辑、版本回退
  * 和流式优化都在这里收口，不向聊天状态引入第二套全局 store。
@@ -67,6 +126,16 @@ export function ArtifactPanel({
   const [error, setError] = useState("")
   // 待确认回滚的版本：恢复操作会新增一个版本，因此先确认再执行。
   const [versionToRevert, setVersionToRevert] = useState<ArtifactVersion | null>(null)
+  /** 正在进行的流式优化请求；卸载或重入时用于中断。 */
+  const optimizeAbortRef = useRef<AbortController | null>(null)
+
+  useEffect(
+    () => () => {
+      optimizeAbortRef.current?.abort()
+      optimizeAbortRef.current = null
+    },
+    [],
+  )
 
   const dirty = Boolean(artifact && (content !== artifact.content || title.trim() !== artifact.title))
   const sortedVersions = useMemo(
@@ -87,7 +156,10 @@ export function ArtifactPanel({
 
     try {
       setError("")
-      const { data } = await api.get<Artifact | null>(`/artifacts/conversation/${conversationId}`)
+      const { data } = await api.get<Artifact | null>(
+        `/artifacts/conversation/${conversationId}`,
+        { skipAuthRedirect: true },
+      )
       setArtifact(data)
       setContent(data?.content ?? "")
       setTitle(data?.title ?? "")
@@ -117,7 +189,10 @@ export function ArtifactPanel({
   async function loadVersions() {
     if (!artifact) return
     try {
-      const { data } = await api.get<ArtifactVersion[]>(`/artifacts/${artifact.id}/versions`)
+      const { data } = await api.get<ArtifactVersion[]>(
+        `/artifacts/${artifact.id}/versions`,
+        { skipAuthRedirect: true },
+      )
       setVersions(data)
     } catch (reason) {
       setError(apiErrorMessage(reason))
@@ -137,16 +212,24 @@ export function ArtifactPanel({
     try {
       let nextArtifact = artifact
       if (content !== artifact.content) {
-        const { data } = await api.put<Artifact>(`/artifacts/${artifact.id}`, {
-          content,
-          changelog: "在报告工作区中编辑",
-        })
+        const { data } = await api.put<Artifact>(
+          `/artifacts/${artifact.id}`,
+          {
+            content,
+            changelog: "在报告工作区中编辑",
+          },
+          { skipAuthRedirect: true },
+        )
         nextArtifact = data
       }
       if (nextTitle !== nextArtifact.title) {
-        const { data } = await api.patch<Artifact>(`/artifacts/${artifact.id}/title`, {
-          title: nextTitle,
-        })
+        const { data } = await api.patch<Artifact>(
+          `/artifacts/${artifact.id}/title`,
+          {
+            title: nextTitle,
+          },
+          { skipAuthRedirect: true },
+        )
         nextArtifact = { ...nextArtifact, ...data }
       }
       setArtifact(nextArtifact)
@@ -174,7 +257,11 @@ export function ArtifactPanel({
     setSaving(true)
     setError("")
     try {
-      const { data } = await api.post<Artifact>(`/artifacts/${artifact.id}/revert/${version.version}`)
+      const { data } = await api.post<Artifact>(
+        `/artifacts/${artifact.id}/revert/${version.version}`,
+        undefined,
+        { skipAuthRedirect: true },
+      )
       setArtifact(data)
       setContent(data.content)
       setTitle(data.title)
@@ -193,18 +280,18 @@ export function ArtifactPanel({
     setError("")
     setEditing(true)
     setContent("")
+
+    // 组件卸载或开始新一轮优化时中断上一轮的流，避免卸载后继续 setState。
+    const controller = new AbortController()
+    optimizeAbortRef.current?.abort()
+    optimizeAbortRef.current = controller
+
     try {
-      const session = getSession()
-      const response = await fetch(`/api/artifacts/${artifact.id}/optimize`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(session?.accessToken && session.accessToken !== "demo"
-            ? { Authorization: `Bearer ${session.accessToken}` }
-            : {}),
-        },
-        body: JSON.stringify({ instruction: instruction.trim() }),
-      })
+      const response = await openArtifactStream(
+        `/api/artifacts/${artifact.id}/optimize`,
+        { instruction: instruction.trim() },
+        controller.signal,
+      )
       if (!response.ok || !response.body) {
         throw new Error(`优化请求失败（${response.status}）`)
       }
@@ -221,7 +308,8 @@ export function ArtifactPanel({
         for (const event of events) {
           const dataLine = event.split("\n").find((line) => line.startsWith("data: "))
           if (!dataLine) continue
-          const payload = JSON.parse(dataLine.slice(6)) as { type?: string; content?: string; message?: string }
+          const payload = parseStreamPayload(dataLine.slice(6))
+          if (!payload) continue
           if (payload.type === "markdown" && payload.content) {
             setContent((current) => current + payload.content)
           }
@@ -234,9 +322,13 @@ export function ArtifactPanel({
       setInstruction("")
       await loadArtifact()
     } catch (reason) {
-      setError(apiErrorMessage(reason))
+      // 主动 abort（卸载/重入）不是用户可见错误。
+      if (!controller.signal.aborted) setError(apiErrorMessage(reason))
     } finally {
-      setOptimizing(false)
+      if (optimizeAbortRef.current === controller) {
+        optimizeAbortRef.current = null
+        setOptimizing(false)
+      }
     }
   }
 

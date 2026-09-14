@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { api } from "@/lib/api";
-import { clearSession, getCurrentUser, isDemoSession } from "@/lib/auth";
+import { getCurrentUser, isDemoSession } from "@/lib/auth";
+import { logoutSession } from "@/lib/logout";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Drawer, DrawerContent, DrawerDescription, DrawerHeader, DrawerTitle } from "@/components/ui/drawer";
@@ -56,7 +56,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const user = getCurrentUser();
   const title = pathname === "/chat" || pathname === "/dashboard" ? "AI 工作区" : pathname.includes("users") ? "用户管理" : pathname.includes("roles") ? "角色管理" : pathname.includes("permissions") ? "权限列表" : "个人信息";
-  async function logout() { if (!isDemoSession()) { const refreshToken = window.localStorage.getItem("cloudsage.session"); try { const parsed = refreshToken ? JSON.parse(refreshToken) as { refreshToken?: string } : {}; await api.post("/auth/logout", { refreshToken: parsed.refreshToken }); } catch { /* token may already be expired */ } } clearSession(); router.replace("/login"); }
+  async function logout() { await logoutSession(); router.replace("/login"); }
   return <div className="min-h-screen bg-background">
     <Sidebar />
     <Drawer open={mobileOpen} onOpenChange={setMobileOpen}><DrawerContent className="max-w-[300px] sm:max-w-[320px]"><DrawerHeader className="sr-only"><DrawerTitle>导航菜单</DrawerTitle><DrawerDescription>Cloudsage 管理后台导航</DrawerDescription></DrawerHeader><Sidebar mobile onClose={() => setMobileOpen(false)} /></DrawerContent></Drawer>

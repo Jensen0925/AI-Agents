@@ -177,6 +177,7 @@ export function DocumentsView({
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              aria-label="搜索文档"
               placeholder="搜索文档标题、内容或标签…"
               className="h-10 w-full rounded-xl border border-input bg-card pl-9 pr-20 text-sm text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-ring focus:ring-3 focus:ring-ring/20"
             />

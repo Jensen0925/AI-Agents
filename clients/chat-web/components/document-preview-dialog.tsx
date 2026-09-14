@@ -280,7 +280,11 @@ export function DocumentPreviewDialog({
     const link = window.document.createElement("a")
     link.href = objectUrl
     link.download = document.title
+    link.rel = "noopener"
+    // 必须 append 到 DOM 再 click：Firefox 对游离节点的下载会静默失效。
+    window.document.body.append(link)
     link.click()
+    link.remove()
   }
 
   return (

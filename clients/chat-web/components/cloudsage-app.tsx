@@ -4,11 +4,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { api, apiErrorMessage } from "@/lib/api"
 import {
-  clearSession,
   getSession,
   isDemoSession,
   type Session,
 } from "@/lib/auth"
+import { logoutSession } from "@/lib/logout"
 import {
   buildCategories,
   buildCategoryOptions,
@@ -61,8 +61,8 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   // 只有用户从侧栏点选会话时才传给 ChatView，避免 ChatView 自己创建会话后被重复加载。
   const [conversationToOpen, setConversationToOpen] = useState<string | undefined>(undefined)
-  // 删除请求是异步的，使用 ref 读取最新的会话选择，避免请求期间切换会话后
-  // 旧删除回调把新会话错误地重置成空白页。
+  // 删除请求是异步的，用 ref 读取最新的会话选择，避免请求返回时
+  // 依据过期的选择把当前会话重置成空白页。
   const activeConversationIdRef = useRef<string | null>(null)
   const conversationToOpenRef = useRef<string | undefined>(undefined)
 
@@ -118,7 +118,16 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
     [activeConversationId, conversations],
   )
 
+  /**
+   * 文档列表请求代次。上传/重新处理之后会在 1.5 秒后补一次轮询，
+   * 期间用户可能又触发一次刷新；晚到的旧响应不能覆盖更新的结果。
+   */
+  const documentsRequestRef = useRef(0)
+
   const loadDocuments = useCallback(async () => {
+    const requestId = documentsRequestRef.current + 1
+    documentsRequestRef.current = requestId
+
     if (isDemoSession()) {
       setDocuments(demoDocuments)
       setDocumentsLoading(false)
@@ -128,11 +137,13 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
     setDocumentsError("")
     try {
       const { data } = await api.get<DocumentRecord[]>("/documents")
+      if (documentsRequestRef.current !== requestId) return
       setDocuments(data.map(mapDocumentRecord))
     } catch (reason) {
+      if (documentsRequestRef.current !== requestId) return
       setDocumentsError(apiErrorMessage(reason))
     } finally {
-      setDocumentsLoading(false)
+      if (documentsRequestRef.current === requestId) setDocumentsLoading(false)
     }
   }, [])
 
@@ -380,8 +391,10 @@ export function CloudSageApp({ initialView = "documents" }: CloudSageAppProps) {
     })
   }
 
-  function logout() {
-    clearSession()
+  async function logout() {
+    // 与 admin-shell 保持一致：撤销服务端 refresh token 再清本地会话，
+    // 否则登出后令牌仍可续期。
+    await logoutSession()
     router.replace("/login")
   }
 

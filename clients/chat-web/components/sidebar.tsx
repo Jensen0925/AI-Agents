@@ -321,6 +321,7 @@ export function Sidebar({
                     type="button"
                     onClick={() => onSelectConversation?.(conversation.id)}
                     title={conversation.title}
+                    aria-current={conversation.id === activeConversationId ? "true" : undefined}
                     className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                   >
                     {conversation.pinned ? (

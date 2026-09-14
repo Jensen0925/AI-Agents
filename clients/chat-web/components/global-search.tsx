@@ -15,6 +15,12 @@ type SearchHit = {
   score: number
 }
 
+/** 与后端 SearchResponse 对齐；degraded 仅在检索发生故障时出现。 */
+type SearchResponse = {
+  results?: SearchHit[]
+  degraded?: string
+}
+
 const DEFAULT_TOP_K = 8
 const DEBOUNCE_MS = 300
 
@@ -37,6 +43,9 @@ export function GlobalSearch({
   const [hits, setHits] = useState<SearchHit[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
+  // 后端在检索故障（模型/向量库不可用）而非「确实没有结果」时回传 degraded，
+  // 必须单独展示，否则用户会把故障当成「知识库里没有这份资料」。
+  const [degraded, setDegraded] = useState("")
   const inputRef = useRef<HTMLInputElement>(null)
 
   const documentsById = useMemo(
@@ -50,6 +59,7 @@ export function GlobalSearch({
       setQuery("")
       setHits([])
       setError("")
+      setDegraded("")
       return
     }
     const timer = window.setTimeout(() => inputRef.current?.focus(), 30)
@@ -61,6 +71,7 @@ export function GlobalSearch({
     if (!open || keyword.length === 0) {
       setHits([])
       setError("")
+      setDegraded("")
       setLoading(false)
       return
     }
@@ -69,6 +80,7 @@ export function GlobalSearch({
     if (demo) {
       setLoading(false)
       setError("")
+      setDegraded("")
       const lower = keyword.toLowerCase()
       setHits(
         documents
@@ -90,20 +102,38 @@ export function GlobalSearch({
 
     setLoading(true)
     setError("")
+    setDegraded("")
+    // 快速改词时旧响应可能后到并覆盖新结果，用 abort + disposed 双保险。
+    const controller = new AbortController()
+    let disposed = false
     const timer = window.setTimeout(() => {
       void api
-        .post<SearchHit[]>("/search", { query: keyword, topK: DEFAULT_TOP_K })
+        .post<SearchResponse>(
+          "/search",
+          { query: keyword, topK: DEFAULT_TOP_K },
+          // 检索是页内可降级功能：403 时在面板里提示，不要整页跳转。
+          { signal: controller.signal, skipAuthRedirect: true },
+        )
         .then(({ data }) => {
-          setHits(Array.isArray(data) ? data : [])
+          if (disposed) return
+          setHits(Array.isArray(data?.results) ? data.results : [])
+          setDegraded(typeof data?.degraded === "string" ? data.degraded : "")
         })
         .catch((reason: unknown) => {
+          if (disposed) return
           setHits([])
           setError(apiErrorMessage(reason))
         })
-        .finally(() => setLoading(false))
+        .finally(() => {
+          if (!disposed) setLoading(false)
+        })
     }, DEBOUNCE_MS)
 
-    return () => window.clearTimeout(timer)
+    return () => {
+      disposed = true
+      controller.abort()
+      window.clearTimeout(timer)
+    }
   }, [demo, documents, open, query])
 
   const hasIndexedDocuments = documents.some(
@@ -157,6 +187,14 @@ export function GlobalSearch({
           </div>
 
           <div className="pretty-scroll min-h-0 flex-1 overflow-y-auto p-2">
+            {degraded && (
+              <div
+                role="status"
+                className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300"
+              >
+                检索服务当前不可用（{degraded}），以下结果可能不完整，请勿据此判定「知识库没有该资料」。
+              </div>
+            )}
             {loading ? (
               <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" /> 正在检索

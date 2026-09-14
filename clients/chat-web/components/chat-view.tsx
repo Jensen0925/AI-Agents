@@ -615,6 +615,7 @@ export function ChatView({
                 onChange={(event) => setInput(event.target.value)}
                 onKeyDown={handleKeyDown}
                 rows={1}
+                aria-label="消息输入"
                 placeholder="向知识库提问，例如：新员工的入职流程是什么？"
                 className="pretty-scroll max-h-40 min-h-9 flex-1 resize-none bg-transparent px-1 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
               />
