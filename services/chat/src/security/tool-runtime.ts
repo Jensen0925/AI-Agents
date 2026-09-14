@@ -12,8 +12,17 @@ export class ToolTimeoutError extends Error {
   }
 }
 
+/**
+ * 配额来源。只要实现 `limit` 与 `tryConsume`，就可以把内存实现替换为
+ * Redis 等跨实例实现，而不用改调用方。
+ */
+export interface ToolQuota {
+  readonly limit: number;
+  tryConsume(key: string): boolean;
+}
+
 /** In-memory quota tracker. Deployments needing cross-instance limits can replace it with Redis. */
-export class QuotaTracker {
+export class QuotaTracker implements ToolQuota {
   private readonly used = new Map<string, number>();
 
   constructor(readonly limit = 30) {}
@@ -32,7 +41,7 @@ export class QuotaTracker {
 
 export interface ToolGuardContext {
   conversationId: string;
-  quota: QuotaTracker;
+  quota: ToolQuota;
 }
 
 export async function withToolGuards<T>(

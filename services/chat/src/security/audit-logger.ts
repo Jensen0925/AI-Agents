@@ -6,13 +6,26 @@ export interface AuditEvent {
 }
 export interface AuditQuery { eventType?: AuditEventType; severity?: AuditSeverity; actor?: string; outcome?: AuditEvent["outcome"]; since?: Date; until?: Date; limit?: number; }
 
-/** In-memory append-only adapter. Supply the callback to forward events to a persistent audit sink. */
+/**
+ * In-memory append-only adapter. Supply the callback to forward events to a persistent audit sink.
+ *
+ * `maxEvents` 提供环形上限：接入生产链路后审计器是进程级单例，只 push 不裁剪
+ * 会让长跑进程内存无界增长。需要完整审计留痕时应通过 `onEvent` 落库。
+ */
 export class AuditLogger {
   private readonly events: AuditEvent[] = [];
-  constructor(private readonly onEvent?: (event: AuditEvent) => void) {}
+  constructor(
+    private readonly onEvent?: (event: AuditEvent) => void,
+    private readonly maxEvents = 1_000,
+  ) {}
   log(event: Omit<AuditEvent, "timestamp"> & { timestamp?: string }): AuditEvent {
     const full = { ...event, timestamp: event.timestamp ?? new Date().toISOString() };
-    this.events.push(full); this.onEvent?.(full); return full;
+    this.events.push(full);
+    if (this.events.length > this.maxEvents) {
+      this.events.splice(0, this.events.length - this.maxEvents);
+    }
+    this.onEvent?.(full);
+    return full;
   }
   logToolInvocation(toolName: string, actor: string, outcome: AuditEvent["outcome"], details: AuditEvent["details"] = {}, traceId?: string): AuditEvent {
     return this.log({ eventType: outcome === "denied" ? "tool_blocked" : "tool_invoked", severity: outcome === "denied" ? "warn" : "info", actor, target: toolName, outcome, details, traceId });

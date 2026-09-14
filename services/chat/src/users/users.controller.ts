@@ -54,13 +54,17 @@ export class UsersController {
 
   @Patch(":id")
   @Permissions("users:update")
-  update(@Param("id") id: string, @Body() body: Parameters<UsersService["update"]>[1]) {
-    return this.users.update(id, body);
+  update(
+    @Req() request: AuthenticatedRequest,
+    @Param("id") id: string,
+    @Body() body: Parameters<UsersService["update"]>[1],
+  ) {
+    return this.users.update(id, body, request.user!.userId);
   }
 
   @Delete(":id")
   @Permissions("users:delete")
-  remove(@Param("id") id: string) {
-    return this.users.remove(id);
+  remove(@Req() request: AuthenticatedRequest, @Param("id") id: string) {
+    return this.users.remove(id, request.user!.userId);
   }
 }

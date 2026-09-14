@@ -7,6 +7,7 @@ import {
   Req,
   UseGuards,
 } from "@nestjs/common";
+import type { Request } from "express";
 import {
   type AuthenticatedRequest,
   JwtAuthGuard,
@@ -27,11 +28,15 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post("login")
-  login(@Body() body: CredentialsBody) {
+  login(@Req() request: Request, @Body() body: CredentialsBody) {
     if (!body.email || !body.password) {
       throw new BadRequestException("email and password are required");
     }
-    return this.authService.login(body.email.trim().toLowerCase(), body.password);
+    return this.authService.login(
+      body.email.trim().toLowerCase(),
+      body.password,
+      request.ip,
+    );
   }
 
   @Post("refresh")
