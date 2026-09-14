@@ -4,6 +4,8 @@ import { MessageRole } from "../src/database/schema";
 import type { SearchService } from "../src/document/search.service";
 import type { OrchestratorService as OrchestratorServiceType } from "../src/llm/agents/orchestrator.service";
 import type { MessageService } from "../src/message/message.service";
+import { loadLangchainConfig } from "../src/config/load-langchain-config";
+import { resolveModelName } from "../src/llm/model-selection";
 
 const extractInvoke = vi.fn(async () =>
   JSON.stringify({
@@ -235,8 +237,15 @@ describe("AdvancedAnalysisService", () => {
     expect(runAnalysisGraph.mock.calls[0]?.[0]).toBe(input);
     expect(runAnalysisGraph.mock.calls[0]?.[1]).toContain("REQ-2026-001");
     expect(runAnalysisGraph.mock.calls[0]?.[1]).toContain("需求必须支持上下文裁剪");
-    // 第四个参数是可选的检索范围，未指定时透传 undefined（等价于「全部文档」）。
-    expect(search).toHaveBeenCalledWith(input, "user-1", 3, undefined);
+    // 第四个参数是可选的检索范围，未指定时透传 undefined（等价于「全部文档」）；
+    // 第五个参数是降级回调，用于区分「检索故障」与「确实没有结果」。
+    expect(search).toHaveBeenCalledWith(
+      input,
+      "user-1",
+      3,
+      undefined,
+      expect.any(Function),
+    );
     expect(addMessage.mock.calls.map((call) => call.slice(0, 3))).toEqual([
       ["conversation-1", MessageRole.USER, input],
       [
@@ -645,7 +654,12 @@ describe("AdvancedAnalysisService", () => {
       "为什么不能查询",
     );
 
-    expect(identity.summary).toContain("底层模型由服务端当前的模型配置决定");
+    // 模型身份问答应直接报出服务端生效的模型名，而不是回避式话术。
+    expect(identity.summary).toContain("我是 CloudSage 应用里的需求分析助手");
+    expect(identity.summary).toContain(
+      resolveModelName({}, loadLangchainConfig().llm),
+    );
+    expect(identity.summary).not.toContain("不能仅凭聊天内容可靠确认");
     expect(orderQuery.status).toBe("completed");
     expect(orderQuery.intent).toBe("query");
     expect(orderQuery.summary).toContain("订单号");

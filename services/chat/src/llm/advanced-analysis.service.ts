@@ -5,7 +5,12 @@ import {
   type MessageContent,
   SystemMessage,
 } from "@langchain/core/messages";
-import { Injectable, Logger } from "@nestjs/common";
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+  type OnModuleDestroy,
+} from "@nestjs/common";
 import { type AttachmentRecord } from "../document/document.service";
 import {
   type DocumentSearchResult,
@@ -30,13 +35,16 @@ import {
 import type { ExpertModelSelector } from "./graph/experts";
 import { runAnalysisGraph } from "./graph/analysis-graph.runner";
 import { createChatModel } from "./model.factory";
-import { resolveReasoningDecision } from "./model-selection";
+import { resolveModelName, resolveReasoningDecision } from "./model-selection";
 import { createDeepOrchestrator } from "./deepagent/deep-orchestrator.service";
 import { detectLongChain } from "./agents/orchestrator.service";
 import { ArtifactService } from "../artifact/artifact.service";
 import { createConversationTitle } from "../conversation/conversation-title";
 import { DatabaseService } from "../database/database.service";
 import { TokenUsageService } from "./cost/token-usage.service";
+import { HARDENED_SYSTEM_SUFFIX } from "../security/input-guard";
+import { securityRuntime } from "../security/security-runtime";
+import { getTraceId } from "../observability/trace-context";
 import {
   classifyConversationRoute,
   isRequirementFollowupAnswer,
@@ -56,6 +64,12 @@ export interface AdvancedAnalysisResult {
   clarificationQuestions?: string[];
   usedAgents: RequirementAgentName[];
   retrievedDocuments: DocumentSearchResult[];
+  /**
+   * 检索降级说明。检索因基础设施故障（模型未下载、pgvector 不可用、超时）
+   * 而非「确实没有相关资料」时填充，供前端与报告显式提示，避免把故障
+   * 当成事实结论。
+   */
+  retrievalNotice?: string;
   queryResponse?: string;
   chatResponse?: string;
   steps?: AnalysisGraphStep[];
@@ -73,12 +87,24 @@ function contentToText(content: MessageContent): string {
     .join("");
 }
 
-function formatRetrievedContext(documents: DocumentSearchResult[]): string {
+/**
+ * 把检索结果渲染成模型可读的上下文块。
+ *
+ * `degradedReason` 用于区分「检索失败」与「确实没有相关资料」：两者都表现为
+ * 空数组，但前者必须显式告知模型与用户，否则报告会给出「无竞品资料 / 无历史
+ * 需求」这类看起来确定、实则源于故障的结论。
+ */
+function formatRetrievedContext(
+  documents: DocumentSearchResult[],
+  degradedReason?: string,
+): string {
   if (documents.length === 0) {
-    return "当前用户知识库没有检索到相关文档。";
+    return degradedReason
+      ? `知识库检索当前不可用（原因：${degradedReason}）。不要据此断言“没有相关资料”，请在结论中说明检索未生效。`
+      : "当前用户知识库没有检索到相关文档。";
   }
 
-  return documents
+  const block = documents
     .map(
       (document, index) => {
         const score = Number.isFinite(document.score) ? document.score : 0;
@@ -86,6 +112,10 @@ function formatRetrievedContext(documents: DocumentSearchResult[]): string {
       },
     )
     .join("\n\n");
+
+  return degradedReason
+    ? `注意：本次检索发生降级（原因：${degradedReason}），下列结果可能不完整。\n\n${block}`
+    : block;
 }
 
 function extractDeepAgentText(value: unknown): string {
@@ -295,28 +325,41 @@ class AnalysisDeadlineError extends Error {
   }
 }
 
-function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+/**
+ * 为一次异步操作设置总时限。
+ *
+ * `run` 接收一个 `AbortSignal`：超时后 signal 会被 abort，底层调用
+ * （LangChain `RunnableConfig.signal`、LangGraph `graph.invoke(..., { signal })`）
+ * 会据此**真正中断**。若只是 reject 外层 Promise，被判定超时的图仍会在
+ * 后台跑完并继续计费。
+ *
+ * 不支持 signal 的操作（例如 chatHistory 落库）直接忽略该参数即可。
+ */
+async function withDeadline<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return promise;
+    return run(new AbortController().signal);
   }
 
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new AnalysisDeadlineError(timeoutMs)),
-      timeoutMs,
-    );
+  const controller = new AbortController();
+  const deadlineError = new AnalysisDeadlineError(timeoutMs);
+  const timer = setTimeout(() => controller.abort(deadlineError), timeoutMs);
 
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
+  try {
+    return await run(controller.signal);
+  } catch (error) {
+    // 模型网关/图把 abort 包装成各自的错误类型，这里统一还原成 deadline 语义，
+    // 让调用方仅凭 `instanceof AnalysisDeadlineError` 就能区分
+    // 「超时降级」与「真实异常」。
+    if (controller.signal.aborted) {
+      throw error instanceof AnalysisDeadlineError ? error : deadlineError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** 只有用户明确要求拆解/报告时，才启动完整的多 Agent 分析链。 */
@@ -478,9 +521,67 @@ function createBriefClarificationResult(
   };
 }
 
+interface ActiveModelInfo {
+  defaultModel: string;
+  high: string;
+  medium: string;
+  compressor: string;
+}
+
+/**
+ * 读取服务端当前生效的模型名。
+ * 配置不可读时返回 undefined —— 模型配置问题只应影响这一个问答应答，
+ * 不能把整条本地快捷回复链路一起带崩。
+ */
+function resolveActiveModelInfo(): ActiveModelInfo | undefined {
+  try {
+    const { llm } = loadLangchainConfig();
+    return {
+      defaultModel: resolveModelName({}, llm),
+      high: resolveModelName({ tier: "high" }, llm),
+      medium: resolveModelName({ tier: "medium" }, llm),
+      compressor: resolveModelName({ tier: "compressor" }, llm),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 模型身份问答应如实作答，答案直接取自服务端配置而非模型自述，
+ * 因此不依赖底层模型是否知道自己的名字。
+ */
+function createModelIdentityResponse(): string {
+  const info = resolveActiveModelInfo();
+
+  if (!info) {
+    return "我是 CloudSage 应用里的需求分析助手。服务端的模型配置当前不可读，我无法确认模型名称。";
+  }
+
+  if (
+    info.high === info.defaultModel &&
+    info.medium === info.defaultModel &&
+    info.compressor === info.defaultModel
+  ) {
+    return [
+      "我是 CloudSage 应用里的需求分析助手。",
+      `当前会话由服务端配置的 ${info.defaultModel} 提供模型能力，深度分析、常规与轻量压缩各档位使用同一模型。`,
+    ].join("\n");
+  }
+
+  return [
+    "我是 CloudSage 应用里的需求分析助手。",
+    "当前会话按推理档位使用服务端配置的模型：",
+    `- 默认：${info.defaultModel}`,
+    `- 深度分析：${info.high}`,
+    `- 常规：${info.medium}`,
+    `- 轻量压缩：${info.compressor}`,
+  ].join("\n");
+}
+
 function createLocalChatResponse(input: string): string {
   if (/(什么模型|哪个模型|模型版本)/iu.test(input)) {
-    return "我是 CloudSage 应用里的需求分析助手。底层模型由服务端当前的模型配置决定；我不能仅凭聊天内容可靠确认具体模型名称。";
+    return createModelIdentityResponse();
   }
   if (/(天气|气温|下雨|晴)/iu.test(input)) {
     return "我无法直接获取实时天气，但可以帮你查询天气接口需求、设计展示方案，或分析一段天气相关的产品需求。";
@@ -522,6 +623,7 @@ async function answerDirectly(
   input: string,
   history: BaseMessage[],
   timeoutMs: number,
+  safetySuffix = "",
 ): Promise<string> {
   if (shouldUseLocalChatResponse(input)) {
     return createLocalChatResponse(input);
@@ -530,18 +632,25 @@ async function answerDirectly(
   try {
     const model = createChatModel({ reasoningLevel: "light" });
     const response = await withDeadline(
-      model.invoke([
-        new SystemMessage(
+      (signal) =>
+        model.invoke(
           [
-            "你是 CloudSage 的通用 AI 助手。",
-            "直接回答用户当前的问题；技术概念、编程问题和知识解释不要转换成需求采集。",
-            "只有用户明确提出要开发功能、提交需求或生成需求分析报告时，才进入需求澄清。",
-            "回答应准确、简洁；不知道时明确说明，不要虚构内部数据或知识库来源。",
-          ].join("\n"),
+            new SystemMessage(
+              [
+                "你是 CloudSage 的通用 AI 助手。",
+                "直接回答用户当前的问题；技术概念、编程问题和知识解释不要转换成需求采集。",
+                "只有用户明确提出要开发功能、提交需求或生成需求分析报告时，才进入需求澄清。",
+                "回答应准确、简洁；不知道时明确说明，不要虚构内部数据或知识库来源。",
+                safetySuffix,
+              ]
+                .filter(Boolean)
+                .join("\n"),
+            ),
+            ...history.slice(-6),
+            new HumanMessage(input),
+          ],
+          { signal },
         ),
-        ...history.slice(-6),
-        new HumanMessage(input),
-      ]),
       timeoutMs,
     );
     const content = contentToText(response.content).trim();
@@ -555,28 +664,41 @@ async function answerFromKnowledgeBase(
   input: string,
   documents: DocumentSearchResult[],
   timeoutMs: number,
+  degradedReason?: string,
+  safetySuffix = "",
 ): Promise<string> {
   if (documents.length === 0) {
-    return `知识库中没有找到与“${input}”相关的内容。你可以补充或上传相关文档，也可以去掉“知识库/内部文档”等限定后改为通用模型问答。`;
+    // 区分「检索故障」与「确实没有资料」：前者不能告诉用户「没有找到」。
+    return degradedReason
+      ? `知识库检索当前不可用（原因：${degradedReason}），无法确认是否有相关内容。请稍后重试，或去掉“知识库/内部文档”等限定后改为通用模型问答。`
+      : `知识库中没有找到与“${input}”相关的内容。你可以补充或上传相关文档，也可以去掉“知识库/内部文档”等限定后改为通用模型问答。`;
   }
 
   try {
     const model = createChatModel({ reasoningLevel: "standard" });
     const response = await withDeadline(
-      model.invoke([
-        new SystemMessage(
+      (signal) =>
+        model.invoke(
           [
-            "你是知识库问答助手，只能依据提供的知识库片段回答。",
-            "如果片段不足以支持结论，要明确说明信息不足；禁止把常识当成知识库内容补写。",
-            "回答中使用“知识库显示/文档提到”等措辞，并保持简洁。",
-          ].join("\n"),
+            new SystemMessage(
+              [
+                "你是知识库问答助手，只能依据提供的知识库片段回答。",
+                "如果片段不足以支持结论，要明确说明信息不足；禁止把常识当成知识库内容补写。",
+                "回答中使用“知识库显示/文档提到”等措辞，并保持简洁。",
+                safetySuffix,
+              ]
+                .filter(Boolean)
+                .join("\n"),
+            ),
+            new HumanMessage(
+              [
+                `用户问题：${input}`,
+                formatRetrievedContext(documents, degradedReason),
+              ].join("\n\n"),
+            ),
+          ],
+          { signal },
         ),
-        new HumanMessage(
-          [`用户问题：${input}`, formatRetrievedContext(documents)].join(
-            "\n\n",
-          ),
-        ),
-      ]),
       timeoutMs,
     );
     const content = contentToText(response.content).trim();
@@ -781,7 +903,7 @@ function legacyResultToGraphResult(
  * 统一串联 PostgreSQL 会话记忆、用户文档检索和 Multi-Agent 需求分析。
  */
 @Injectable()
-export class AdvancedAnalysisService {
+export class AdvancedAnalysisService implements OnModuleDestroy {
   private readonly logger = new Logger(AdvancedAnalysisService.name);
   private readonly tokenUsageService?: TokenUsageService;
   /**
@@ -811,6 +933,26 @@ export class AdvancedAnalysisService {
   }
 
   /**
+   * 关机时先尽力把积压的成本记录刷盘，再释放重试定时器；
+   * 两者都不能抛错，否则会打断剩余模块的关闭流程。
+   */
+  async onModuleDestroy(): Promise<void> {
+    const usageService = this.tokenUsageService;
+    if (!usageService) return;
+    try {
+      await usageService.flushPending();
+    } catch (error) {
+      this.logger.warn(
+        `Token usage flush on shutdown failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    } finally {
+      usageService.dispose();
+    }
+  }
+
+  /**
    * 使用已有历史与当前用户知识库增强本轮输入，执行分析后将问答写回消息表。
    */
   async analyze(
@@ -820,6 +962,17 @@ export class AdvancedAnalysisService {
     scope?: RetrievalScope,
     attachments?: AttachmentRecord[],
   ): Promise<AdvancedAnalysisResult> {
+    // 紧急停止：运维在事故中停掉 Agent 后必须立刻拒绝新的模型调用，而不是
+    // 继续烧额度、继续产生外部副作用。刻意放在 try 之外——否则会被下面的
+    // 「兜底返回本地结果」吞掉，用户看到的仍是一份看似正常的回答。
+    try {
+      securityRuntime.assertAgentActive();
+    } catch (error) {
+      throw new ServiceUnavailableException(
+        error instanceof Error ? error.message : "Agent 已被紧急停止",
+      );
+    }
+
     try {
       return await this.analyzeInternal(
         userId,
@@ -884,10 +1037,21 @@ export class AdvancedAnalysisService {
       conversationId,
       this.messageService,
     );
+
+    // 注入检测（用户输入部分）。命中时不丢弃输入——它可能只是正常的技术讨论
+    // 或安全评审——而是给模型上下文附加加固提示，并写入审计事件供事后追溯。
+    // 放在所有分支之前，保证闲聊直答、快速澄清、知识库问答与完整图都被覆盖。
+    const traceId = getTraceId() ?? undefined;
+    const inputVerdict = securityRuntime.inspectUserInput(
+      normalizedInput,
+      userId,
+      traceId,
+    );
+
     let history: Awaited<ReturnType<DbChatHistory["getMessages"]>> = [];
     try {
       history = await withDeadline(
-        chatHistory.getMessages(),
+        () => chatHistory.getMessages(),
         Math.min(3_000, this.retrievalTimeoutMs),
       );
     } catch (error) {
@@ -905,16 +1069,17 @@ export class AdvancedAnalysisService {
     // 也能立即看到用户刚发送的内容；assistant 结果仍在流程结束后写入。
     try {
       await withDeadline(
-        chatHistory.addMessage(
-          new HumanMessage({
-            content: normalizedInput,
-            // 附件只作为展示用的引用写进 metadata（经 additional_kwargs 落库），
-            // 不进入模型上下文，避免把文件信息当事实喂给 LLM。
-            ...(attachments?.length
-              ? { additional_kwargs: { attachments } }
-              : {}),
-          }),
-        ),
+        () =>
+          chatHistory.addMessage(
+            new HumanMessage({
+              content: normalizedInput,
+              // 附件只作为展示用的引用写进 metadata（经 additional_kwargs 落库），
+              // 不进入模型上下文，避免把文件信息当事实喂给 LLM。
+              ...(attachments?.length
+                ? { additional_kwargs: { attachments } }
+                : {}),
+            }),
+          ),
         Math.min(3_000, this.retrievalTimeoutMs),
       );
     } catch (error) {
@@ -981,7 +1146,7 @@ export class AdvancedAnalysisService {
       const conclusion = analysisConclusion(quickResult);
       try {
         await withDeadline(
-          chatHistory.addMessage(new AIMessage(conclusion)),
+          () => chatHistory.addMessage(new AIMessage(conclusion)),
           Math.min(2_000, this.retrievalTimeoutMs),
         );
       } catch (error) {
@@ -1017,10 +1182,11 @@ export class AdvancedAnalysisService {
         normalizedInput,
         history,
         this.analysisTimeoutMs,
+        inputVerdict.flagged ? HARDENED_SYSTEM_SUFFIX : "",
       );
       try {
         await withDeadline(
-          chatHistory.addMessage(new AIMessage(response)),
+          () => chatHistory.addMessage(new AIMessage(response)),
           Math.min(2_000, this.retrievalTimeoutMs),
         );
       } catch (error) {
@@ -1045,6 +1211,9 @@ export class AdvancedAnalysisService {
     }
 
     let retrievedDocuments: DocumentSearchResult[] = [];
+    // 检索降级原因：为空表示「检索正常执行」，非空表示「检索发生故障」。
+    // 两者都可能得到空数组，必须分开跟踪，否则会把故障讲成事实。
+    let retrievalNotice: string | undefined;
     let retrieval = {
       enabled: false,
       topK: 3,
@@ -1056,10 +1225,9 @@ export class AdvancedAnalysisService {
         topK: config.retrieval.topK,
       };
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `LangChain retrieval config unavailable; continuing without retrieval: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `LangChain retrieval config unavailable; continuing without retrieval: ${reason}`,
       );
     }
     const shouldRetrieve =
@@ -1067,17 +1235,23 @@ export class AdvancedAnalysisService {
     if (retrieval.enabled && shouldRetrieve) {
       try {
         retrievedDocuments = await withDeadline(
-          this.searchService.search(
-            normalizedInput,
-            userId,
-            Math.max(1, Math.floor(retrieval.topK)),
-            scope,
-          ),
+          () =>
+            this.searchService.search(
+              normalizedInput,
+              userId,
+              Math.max(1, Math.floor(retrieval.topK)),
+              scope,
+              (reason) => {
+                retrievalNotice ??= reason;
+              },
+            ),
           this.retrievalTimeoutMs,
         );
       } catch (error) {
         // 语义检索属于可选增强能力；模型或向量库不可用时使用空上下文，
         // 仍然返回人工审核或模型可生成的分析结果，而不是 HTTP 500。
+        // 但必须记录降级原因，避免下游把「故障」当成「没有资料」。
+        retrievalNotice ??= error instanceof Error ? error.message : String(error);
         this.logger.warn(
           `Document retrieval unavailable; continuing without context: ${
             error instanceof Error ? error.message : String(error)
@@ -1086,15 +1260,28 @@ export class AdvancedAnalysisService {
       }
     }
 
+    // 注入检测（外部内容部分）：检索片段属于不可信外部内容，命中也同样加固。
+    const externalContentFlagged = retrievedDocuments.some(
+      (document) =>
+        securityRuntime.inspectToolOutput(document.content, userId, traceId)
+          .flagged,
+    );
+    const safetySuffix =
+      inputVerdict.flagged || externalContentFlagged
+        ? HARDENED_SYSTEM_SUFFIX
+        : "";
+
     if (conversationRoute === "knowledge") {
       const response = await answerFromKnowledgeBase(
         normalizedInput,
         retrievedDocuments,
         this.analysisTimeoutMs,
+        retrievalNotice,
+        safetySuffix,
       );
       try {
         await withDeadline(
-          chatHistory.addMessage(new AIMessage(response)),
+          () => chatHistory.addMessage(new AIMessage(response)),
           Math.min(2_000, this.retrievalTimeoutMs),
         );
       } catch (error) {
@@ -1113,6 +1300,7 @@ export class AdvancedAnalysisService {
         clarificationQuestions: [],
         usedAgents: [],
         retrievedDocuments,
+        ...(retrievalNotice ? { retrievalNotice } : {}),
         queryResponse: response,
         steps: ["classifier", "knowledgeHandler"],
       };
@@ -1127,7 +1315,8 @@ export class AdvancedAnalysisService {
     // 若把历史直接拼进分类文本，历史中的“需求/报告”等词会把普通闲聊误判为 analyze。
     const context = [
       historyContext ? `会话历史：\n${historyContext}` : "",
-      `知识库检索上下文：\n${formatRetrievedContext(retrievedDocuments)}`,
+      `知识库检索上下文：\n${formatRetrievedContext(retrievedDocuments, retrievalNotice)}`,
+      safetySuffix,
     ]
       .filter(Boolean)
       .join("\n\n");
@@ -1154,28 +1343,37 @@ export class AdvancedAnalysisService {
         });
         const deepAgent = createDeepOrchestrator({
           model: deepModel,
-          retrievedContext: formatRetrievedContext(retrievedDocuments),
+          retrievedContext: formatRetrievedContext(retrievedDocuments, retrievalNotice),
         });
         const deepResult = await withDeadline(
-          deepAgent.invoke({
-            messages: [
-              new HumanMessage(
-                [
-                  normalizedInput,
-                  buildRetrievedContextBlock(formatRetrievedContext(retrievedDocuments)),
-                ]
-                  .filter(Boolean)
-                  .join("\n\n"),
-              ),
-            ],
-          }),
+          (signal) =>
+            deepAgent.invoke(
+              {
+                messages: [
+                  new HumanMessage(
+                    [
+                      normalizedInput,
+                      buildRetrievedContextBlock(
+                        formatRetrievedContext(
+                          retrievedDocuments,
+                          retrievalNotice,
+                        ),
+                      ),
+                    ]
+                      .filter(Boolean)
+                      .join("\n\n"),
+                  ),
+                ],
+              },
+              { signal },
+            ),
           this.analysisTimeoutMs,
         );
         const deepReport = extractDeepAgentText(deepResult);
         if (deepReport) {
           try {
             await withDeadline(
-              chatHistory.addMessage(new AIMessage(deepReport)),
+              () => chatHistory.addMessage(new AIMessage(deepReport)),
               Math.min(2_000, this.retrievalTimeoutMs),
             );
           } catch (error) {
@@ -1198,6 +1396,7 @@ export class AdvancedAnalysisService {
             clarificationQuestions: [],
             usedAgents: ["analysisAgent", "summaryAgent"],
             retrievedDocuments,
+            ...(retrievalNotice ? { retrievalNotice } : {}),
             steps: ["analysisStep", "summaryStep"],
           };
         }
@@ -1224,13 +1423,15 @@ export class AdvancedAnalysisService {
         `Analysis reasoning decision: level=${reasoningDecision.level}, reason=${reasoningDecision.reason}`,
       );
       graphResult = await withDeadline(
-        runAnalysisGraph(normalizedInput, context, {
-          model: analysisModel,
-          userId,
-          sessionId: conversationId,
-          usageService: this.tokenUsageService,
-          expertModelSelector: selectBudgetExpertModel,
-        }),
+        (signal) =>
+          runAnalysisGraph(normalizedInput, context, {
+            model: analysisModel,
+            userId,
+            sessionId: conversationId,
+            usageService: this.tokenUsageService,
+            expertModelSelector: selectBudgetExpertModel,
+            signal,
+          }),
         this.analysisTimeoutMs,
       );
     } catch (error) {
@@ -1331,7 +1532,7 @@ export class AdvancedAnalysisService {
     // 会话接口共享数据源；用户消息已在模型调用前持久化，避免长请求期间丢失。
     try {
       await withDeadline(
-        chatHistory.addMessage(new AIMessage(conclusion)),
+        () => chatHistory.addMessage(new AIMessage(conclusion)),
         Math.min(2_000, this.retrievalTimeoutMs),
       );
     } catch (error) {
@@ -1359,6 +1560,7 @@ export class AdvancedAnalysisService {
         summary: conclusion,
         usedAgents: legacyFallbackResult.usedAgents,
         retrievedDocuments,
+        ...(retrievalNotice ? { retrievalNotice } : {}),
         steps: graphResult.steps,
       };
       if (legacyFallbackResult.clarificationQuestions.length > 0) {
@@ -1393,6 +1595,7 @@ export class AdvancedAnalysisService {
       clarificationQuestions,
       usedAgents,
       retrievedDocuments,
+      ...(retrievalNotice ? { retrievalNotice } : {}),
       queryResponse: graphResult.queryResponse,
       chatResponse: graphResult.chatResponse,
       steps: graphResult.steps,
