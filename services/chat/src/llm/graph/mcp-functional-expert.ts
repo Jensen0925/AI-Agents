@@ -67,6 +67,8 @@ export interface McpFunctionalExpertOptions {
   manager: MCPManager;
   userId: string;
   intent?: MCPToolIntent;
+  /** 会话标识：用于工具调用的按会话配额与审计归属。 */
+  conversationId?: string;
   llm?: unknown;
   createAgent?: CreateReactAgent;
 }
@@ -85,7 +87,11 @@ export async function createMcpFunctionalExpert(
 ): Promise<McpFunctionalExpert> {
   const intent = options.intent ?? 'analyze';
   await options.manager.connectAll();
-  const mcpTools = options.manager.getTools({ userId: options.userId, intent });
+  const mcpTools = options.manager.getTools({
+    userId: options.userId,
+    intent,
+    conversationId: options.conversationId,
+  });
   const mergedTools: StructuredToolInterface[] = [
     readRequirementTool,
     checkExistingFeaturesTool,

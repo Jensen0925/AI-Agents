@@ -203,7 +203,28 @@ function actionError(message: string, response: AIUIResponse): AIUIResponse {
  */
 @Injectable()
 export class UiFlowService {
+  /**
+   * 进程内交互状态上限。状态只在会话被显式删除时才 clear，而历史会话通常
+   * 不会被删除，因此不裁剪会随会话数无界增长。超出时按 LRU 淘汰最久未访问
+   * 的会话（淘汰只影响内存态，Controller 仍可用持久化的 flowContext 恢复）。
+   */
+  private static readonly MAX_SESSIONS = 1_000;
+
   private readonly flowStates = new Map<string, FlowState>();
+
+  /** 写入并刷新 LRU 位置，必要时淘汰最久未访问的会话。 */
+  private setState(sessionId: string, state: FlowState): FlowState {
+    this.flowStates.delete(sessionId);
+    this.flowStates.set(sessionId, state);
+
+    while (this.flowStates.size > UiFlowService.MAX_SESSIONS) {
+      const oldest = this.flowStates.keys().next().value;
+      if (oldest === undefined || oldest === sessionId) break;
+      this.flowStates.delete(oldest);
+    }
+
+    return state;
+  }
 
   /** 判断当前进程内是否已经为指定会话初始化过交互流程。 */
   hasSession(sessionId: string): boolean {
@@ -222,7 +243,7 @@ export class UiFlowService {
       return false;
     }
 
-    this.flowStates.set(sessionId, {
+    this.setState(sessionId, {
       context: {
         sessionStage: value.sessionStage,
         collectedData: { ...value.collectedData },
@@ -239,20 +260,19 @@ export class UiFlowService {
   private getOrCreateState(sessionId: string): FlowState {
     const current = this.flowStates.get(sessionId);
     if (current) {
-      return current;
+      // 命中即刷新 LRU 位置，保证活跃会话不会被淘汰。
+      return this.setState(sessionId, current);
     }
 
     const state: FlowState = { context: createInitialContext() };
-    this.flowStates.set(sessionId, state);
-    return state;
+    return this.setState(sessionId, state);
   }
 
   /** 开始一次新的需求分析交互，将首句记录到 collectedData，并返回 Stage 1。 */
   start(sessionId: string, input?: string): AIUIResponse {
-    const state: FlowState = {
+    this.setState(sessionId, {
       context: createInitialContext(input),
-    };
-    this.flowStates.set(sessionId, state);
+    });
     return selectionResponse();
   }
 

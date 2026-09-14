@@ -26,6 +26,7 @@ import {
 import { createChatModel } from "../model.factory";
 import type { TokenUsageService } from "../cost/token-usage.service";
 import { classifyConversationRoute } from "../conversation-route";
+import { getSharedCheckpointer } from "./checkpointer.provider";
 import { analysisTools } from "./analysis-tools";
 import {
   createAnalysisSupervisorSubGraph,
@@ -256,31 +257,13 @@ export function createAnalysisThreadId(userId: string, sessionId: string): strin
 type PostgresSaverLike = BaseCheckpointSaver & { setup(): Promise<void> };
 
 /**
- * 创建并初始化 PostgreSQL checkpointer。
+ * 兼容旧调用方：返回进程级共享的 checkpointer。
  *
- * 依赖以动态加载方式接入：未配置 DATABASE_URL 或尚未安装可选包时，调用方
- * 可继续使用无持久化图；生产环境安装依赖后即可共享 PostgreSQL。
+ * 历史实现每次调用都会 `fromConnString()` 新建连接池并重跑 `setup()` 建表
+ * DDL；现在统一走 `checkpointer.provider`，连接池与建表在进程内只发生一次。
  */
 export async function createPostgresCheckpointer(): Promise<PostgresSaverLike | undefined> {
-  const databaseUrl = process.env.DATABASE_URL?.trim();
-  if (!databaseUrl) return undefined;
-
-  try {
-    const moduleName = "@langchain/langgraph-checkpoint-postgres";
-    const checkpointModule = (await import(moduleName)) as {
-      PostgresSaver?: { fromConnString(url: string): PostgresSaverLike };
-    };
-    const checkpointer = checkpointModule.PostgresSaver?.fromConnString(databaseUrl);
-    if (!checkpointer) throw new Error("PostgresSaver export is unavailable");
-    await checkpointer.setup();
-    return checkpointer;
-  } catch (error) {
-    console.warn(
-      "[LangGraph] PostgreSQL checkpoint 未启用，继续使用无持久化图：",
-      error instanceof Error ? error.message : error,
-    );
-    return undefined;
-  }
+  return getSharedCheckpointer();
 }
 
 /** 图的稳定对外输出；保留 analysis/risk，同时提供新的 Result 字段别名。 */
@@ -775,6 +758,61 @@ function createClassifierNode(model: ChatModel) {
   };
 }
 
+/**
+ * 抽取节点约定的结构化字段。
+ *
+ * 字段全部可选：模型漏掉某一项时不应让整次分析失败，但多出的键必须被剥掉，
+ * 避免把模型自由发挥的内容当成需求事实继续传递。
+ */
+const extractedFieldsSchema = z.object({
+  title: z.string().optional(),
+  actors: z.array(z.string()).optional(),
+  goals: z.array(z.string()).optional(),
+  functionalRequirements: z.array(z.string()).optional(),
+  nonFunctionalRequirements: z.array(z.string()).optional(),
+  constraints: z.array(z.string()).optional(),
+  unknowns: z.array(z.string()).optional(),
+});
+
+/** 模型未返回可解析结构时传给下游的占位值，明确告知下游「字段抽取失败」。 */
+const EXTRACTION_FALLBACK = JSON.stringify({
+  title: "",
+  actors: [],
+  goals: [],
+  functionalRequirements: [],
+  nonFunctionalRequirements: [],
+  constraints: [],
+  unknowns: [],
+  extractionError:
+    "字段抽取未返回合法 JSON，请仅依据用户原文继续，不要假设任何缺失字段。",
+});
+
+/** 去掉模型可能包裹的 Markdown 代码块围栏。 */
+function stripJsonFence(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^```(?:json)?\s*/iu, "")
+    .replace(/\s*```$/u, "")
+    .trim();
+}
+
+/**
+ * 校验抽取结果是否为约定的 JSON 结构。
+ *
+ * 模型输出是纯文本，抽取节点此前直接把这段文本当作结构化字段传给后续节点：
+ * 一旦返回跑题的自然语言或残缺 JSON，下游提示词会把这段文本当作已确认的需求事实。
+ * 这里做一次 schema 校验，合法则继续传原始 JSON 文本，非法则替换为显式失败标记。
+ */
+function normalizeExtractedFields(raw: string): string {
+  const text = stripJsonFence(raw);
+  try {
+    const parsed = extractedFieldsSchema.safeParse(JSON.parse(text));
+    return parsed.success ? text : EXTRACTION_FALLBACK;
+  } catch {
+    return EXTRACTION_FALLBACK;
+  }
+}
+
 /** 字段抽取节点：调用 extractAgent，并仅更新 extracted。 */
 async function extractNode(
   state: RequirementAnalysisStateValue,
@@ -784,7 +822,7 @@ async function extractNode(
     retrievedContext: getRetrievedContext(state),
   });
 
-  return { extracted };
+  return { extracted: normalizeExtractedFields(extracted) };
 }
 
 /** 澄清判断节点：调用 clarifyAgent，并仅更新 clarified。 */
@@ -1268,6 +1306,11 @@ export async function runAnalysisGraph(
     checkpointer?: BaseCheckpointSaver;
     usageService?: TokenUsageService;
     expertModelSelector?: ExpertModelSelector;
+    /**
+     * 调用方（HTTP 请求）的总时限信号。超时后 LangGraph 会把中断传播到
+     * 正在执行的节点与模型调用，而不是让图在后台继续烧 token。
+     */
+    signal?: AbortSignal;
   } = {},
 ): Promise<RunAnalysisGraphOutput> {
   const checkpointer =
@@ -1280,6 +1323,8 @@ export async function runAnalysisGraph(
     usageService: options.usageService,
     usageContext: {
       conversationId: options.sessionId,
+      // 真实调用者身份：MCP 工具的按用户 ACL 与审计主体都依赖它。
+      userId: options.userId,
       threadId:
         options.userId && options.sessionId
           ? createAnalysisThreadId(options.userId, options.sessionId)
@@ -1291,11 +1336,17 @@ export async function runAnalysisGraph(
     options.userId && options.sessionId
       ? createAnalysisThreadId(options.userId, options.sessionId)
       : undefined;
-  const state = await graph.invoke({
-    messages: [new HumanMessage(input)],
-    input,
-    retrievedContext,
-  }, threadId ? { configurable: { thread_id: threadId } } : undefined);
+  const state = await graph.invoke(
+    {
+      messages: [new HumanMessage(input)],
+      input,
+      retrievedContext,
+    },
+    {
+      ...(threadId ? { configurable: { thread_id: threadId } } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+    },
+  );
 
   return {
     messages: state.messages,

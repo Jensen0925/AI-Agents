@@ -20,10 +20,14 @@ import { mcpManager } from "../../mcp/mcp-bootstrap";
 import type { AgentName } from "../cost/agent-model-set";
 import {
   resolveBudgetAction,
+  resolveMonthlyBudgetUsd,
   type BudgetAction,
 } from "../cost/budget-policy";
 import { withTokenUsage } from "../cost/with-token-usage";
-import type { TokenUsageService } from "../cost/token-usage.service";
+import type {
+  MonthlyStats,
+  TokenUsageService,
+} from "../cost/token-usage.service";
 import {
   checkConflictsTool,
   searchRequirementTool,
@@ -65,6 +69,59 @@ const DEFAULT_RETRIEVED_CONTEXT = "当前知识库没有检索到相关资料。
 export interface AnalysisUsageContext {
   conversationId?: string;
   threadId?: string;
+  /**
+   * 调用者身份。专家节点取 MCP 工具时按该身份做 ACL 裁剪，并写入审计日志，
+   * 因此必须透传真实用户，缺失时才退回 system。
+   */
+  userId?: string;
+}
+
+/** 月度成本统计在同一请求内的复用窗口。 */
+const MONTHLY_STATS_TTL_MS = 3_000;
+/** 缓存键上限，超出后清理过期项，避免长生命周期进程内无界增长。 */
+const MONTHLY_STATS_CACHE_MAX_KEYS = 200;
+
+const monthlyStatsCache = new Map<
+  string,
+  { at: number; value: Promise<MonthlyStats> }
+>();
+
+/**
+ * 获取月度成本统计，并在同一请求上下文内复用结果。
+ *
+ * 4 个专家节点是并行执行的，各自调用一次 `getMonthlyStats()` 会对同一张
+ * `token_usages` 表跑 4 次完全相同的全表聚合。这里按 threadId/conversationId
+ * 复用同一个 in-flight Promise；失败时立即从缓存移除，避免把 rejected promise
+ * 永久留在缓存里（一次抖动后该上下文再也拿不到预算数据）。
+ */
+function getMonthlyStatsOnce(
+  service: TokenUsageService,
+  context?: AnalysisUsageContext,
+): Promise<MonthlyStats> {
+  const key = context?.threadId ?? context?.conversationId ?? "global";
+  const now = Date.now();
+  const cached = monthlyStatsCache.get(key);
+  if (cached && now - cached.at < MONTHLY_STATS_TTL_MS) {
+    return cached.value;
+  }
+
+  if (monthlyStatsCache.size >= MONTHLY_STATS_CACHE_MAX_KEYS) {
+    for (const [cachedKey, entry] of monthlyStatsCache) {
+      if (now - entry.at >= MONTHLY_STATS_TTL_MS) {
+        monthlyStatsCache.delete(cachedKey);
+      }
+    }
+  }
+
+  const value = service.getMonthlyStats();
+  monthlyStatsCache.set(key, { at: now, value });
+  void value.catch(() => {
+    if (monthlyStatsCache.get(key)?.value === value) {
+      monthlyStatsCache.delete(key);
+    }
+  });
+
+  return value;
 }
 
 /**
@@ -220,7 +277,10 @@ export const COMPLIANCE_EXPERT_TOOLS = [
 ] satisfies StructuredToolInterface[];
 
 /** 返回领域本地工具；未知领域默认拒绝，MCP 连接失败时由这些工具兜底。 */
-export function getExpertTools(domain: string): StructuredToolInterface[] {
+export function getExpertTools(
+  domain: string,
+  context?: AnalysisUsageContext,
+): StructuredToolInterface[] {
   let localTools: StructuredToolInterface[];
   switch (domain) {
     case "functional":
@@ -244,7 +304,13 @@ export function getExpertTools(domain: string): StructuredToolInterface[] {
   try {
     return [
       ...localTools,
-      ...mcpManager.getTools({ intent: "analyze", userId: "system" }),
+      ...mcpManager.getTools({
+        intent: "analyze",
+        // 透传真实调用者：按用户的工具 ACL 与审计主体都依赖这个身份，
+        // 只有拿不到身份时才退回 system。
+        userId: context?.userId ?? "system",
+        ...(context?.conversationId ? { conversationId: context.conversationId } : {}),
+      }),
     ];
   } catch (error) {
     console.warn(
@@ -549,10 +615,16 @@ export function createExpertSubGraph(
       let budgetAction: BudgetAction = "allow";
       let budgetOverrideReason: string | null = null;
       if (opts.usageService) {
-        const monthlyBudget = Number(process.env.MONTHLY_BUDGET_USD ?? 0);
+        // 默认开启预算熔断：未配置 MONTHLY_BUDGET_USD 时回落到安全网额度，
+        // 只有显式设为 0 才表示「不限额」。若把缺失读成 0，默认部署就会
+        // 短路整个检查，等于成本无上限。
+        const monthlyBudget = resolveMonthlyBudgetUsd();
         if (monthlyBudget > 0) {
           try {
-            const monthly = await opts.usageService.getMonthlyStats();
+            const monthly = await getMonthlyStatsOnce(
+              opts.usageService,
+              opts.usageContext,
+            );
             const usedPercent = (monthly.totalCost / monthlyBudget) * 100;
             const budget = resolveBudgetAction({
               budgetUsedPercent: usedPercent,
@@ -698,7 +770,7 @@ export function createFunctionalExpert(
 ) {
   return createExpertSubGraph(
     model,
-    getExpertTools("functional"),
+    getExpertTools("functional", usageContext),
     FUNCTIONAL_EXPERT_SYSTEM_PROMPT,
     "functionalAnalysis",
     {
@@ -719,7 +791,7 @@ export function createPerformanceExpert(
 ) {
   return createExpertSubGraph(
     model,
-    getExpertTools("performance"),
+    getExpertTools("performance", usageContext),
     PERFORMANCE_EXPERT_SYSTEM_PROMPT,
     "performanceAnalysis",
     {
@@ -740,7 +812,7 @@ export function createSecurityExpert(
 ) {
   return createExpertSubGraph(
     model,
-    getExpertTools("security"),
+    getExpertTools("security", usageContext),
     SECURITY_EXPERT_SYSTEM_PROMPT,
     "securityAnalysis",
     {
@@ -761,7 +833,7 @@ export function createComplianceExpert(
 ) {
   return createExpertSubGraph(
     model,
-    getExpertTools("compliance"),
+    getExpertTools("compliance", usageContext),
     COMPLIANCE_EXPERT_SYSTEM_PROMPT,
     "complianceAnalysis",
     {

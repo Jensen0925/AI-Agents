@@ -5,6 +5,36 @@ import {
 
 export type BudgetAction = "allow" | "downgrade" | "reject";
 
+/**
+ * 未配置 `MONTHLY_BUDGET_USD` 时的兜底月度预算（USD）。
+ *
+ * 历史实现把缺失的预算读成 0 并以此短路整个预算检查，等价于「默认部署下
+ * 模型成本没有任何上限」——一次跑飞的循环就能烧掉任意金额。这里给一个明确的
+ * 安全网额度：行为上仍然只在 80%/100% 时降级与熔断，但至少存在上限。
+ * 需要真正不限额（自托管、压测）时显式设置 `MONTHLY_BUDGET_USD=0`。
+ */
+export const DEFAULT_MONTHLY_BUDGET_USD = 100;
+
+/**
+ * 解析月度预算上限。
+ * - 未设置 / 空串 / 非法数字 → `DEFAULT_MONTHLY_BUDGET_USD`
+ * - `0` 或负数 → 0，表示显式关闭预算熔断
+ */
+export function resolveMonthlyBudgetUsd(
+  raw: string | undefined = process.env["MONTHLY_BUDGET_USD"],
+): number {
+  if (raw === undefined || raw.trim() === "") {
+    return DEFAULT_MONTHLY_BUDGET_USD;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_MONTHLY_BUDGET_USD;
+  }
+
+  return parsed;
+}
+
 export interface BudgetPolicyInput {
   budgetUsedPercent: number;
   agentName: string;
