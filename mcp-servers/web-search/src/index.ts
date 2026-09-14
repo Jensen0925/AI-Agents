@@ -135,8 +135,8 @@ export async function searchWithTavily(
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
+    // 密钥只走 Authorization 头：放进 body 会被网关、代理与请求日志一并记录。
     body: JSON.stringify({
-      api_key: apiKey,
       query,
       search_depth: "basic",
       max_results: maxResults,
@@ -159,22 +159,51 @@ export async function searchWithTavily(
     }));
 }
 
-/** 有密钥时走 Tavily；开发环境无密钥或外部请求失败时使用确定性 Mock 数据。 */
+/**
+ * 本轮搜索结果的来源。
+ * - `tavily`：真实检索结果，可作为证据引用。
+ * - `mock`：未配置密钥时的确定性占位数据。
+ * - `unavailable`：配置了密钥但请求失败，本轮没有结果。
+ */
+export type SearchSource = "tavily" | "mock" | "unavailable";
+
+export interface WebSearchOutcome {
+  source: SearchSource;
+  results: SearchResult[];
+  /** 非空表示本轮没有可用的真实检索结果。 */
+  error?: string;
+}
+
+/**
+ * 执行一次网页搜索。
+ *
+ * 只有 Tavily 返回的结果才能作为真实证据：未配置密钥时返回占位数据并标注
+ * `error`；配置了但请求失败时返回空结果，**不**回退到占位数据——否则模型会把
+ * 编造的 example.com 链接当成真实竞品/实践证据写进结论。
+ */
 export async function searchWeb(
   query: string,
   intent: SearchIntent,
-): Promise<{ source: "tavily" | "mock"; results: SearchResult[] }> {
+): Promise<WebSearchOutcome> {
   if (!process.env.TAVILY_API_KEY) {
-    return { source: "mock", results: searchMock(query, intent) };
+    return {
+      source: "mock",
+      results: searchMock(query, intent),
+      error:
+        "TAVILY_API_KEY is not configured; results are deterministic placeholder data, not real search results",
+    };
   }
 
   try {
     return { source: "tavily", results: await searchWithTavily(query) };
   } catch (error) {
-    console.warn(
-      `[web-search] Tavily unavailable, using Mock mode: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return { source: "mock", results: searchMock(query, intent) };
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`[web-search] Tavily search failed: ${reason}`);
+    return {
+      source: "unavailable",
+      results: [],
+      error: `Tavily search failed: ${reason}`,
+    };
   }
 }
 
@@ -182,6 +211,24 @@ function toTextResponse(payload: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(payload) }],
   };
+}
+
+/**
+ * 把搜索结果包装成 MCP 响应。
+ *
+ * 结果不是真实检索数据时，除了在 JSON 里带 `error`，还要标记 `isError`：
+ * 调用方（MCPManager）会把工具错误记录下来，模型也就不会把占位数据
+ * 当作真实证据使用。
+ */
+function toSearchResponse(outcome: WebSearchOutcome) {
+  const payload = {
+    source: outcome.source,
+    results: outcome.results,
+    ...(outcome.error ? { error: outcome.error } : {}),
+  };
+  const response = toTextResponse(payload);
+  if (!outcome.error) return response;
+  return { ...response, isError: true };
 }
 
 const server = new McpServer({
@@ -195,12 +242,20 @@ server.registerTool(
     title: "搜索竞品功能",
     description: "搜索竞品在指定功能或产品领域中的实现模式。",
     inputSchema: {
-      query: z.string().min(1).describe("要调研的功能、产品或竞品问题"),
-      domain: z.string().optional().describe("可选的业务领域，例如 SaaS、电商或协同办公"),
+      query: z
+        .string()
+        .min(1)
+        .max(200)
+        .describe("要调研的功能、产品或竞品问题"),
+      domain: z
+        .string()
+        .max(100)
+        .optional()
+        .describe("可选的业务领域，例如 SaaS、电商或协同办公"),
     },
   },
   async ({ query, domain }) =>
-    toTextResponse(
+    toSearchResponse(
       await searchWeb(`${query}${domain ? ` ${domain}` : ""} competitor features`, "competitors"),
     ),
 );
@@ -211,12 +266,16 @@ server.registerTool(
     title: "搜索最佳实践",
     description: "搜索一个主题在指定行业中的设计、工程或产品最佳实践。",
     inputSchema: {
-      topic: z.string().min(1).describe("要检索的实践主题"),
-      industry: z.string().optional().describe("可选的行业，例如金融、医疗或 SaaS"),
+      topic: z.string().min(1).max(200).describe("要检索的实践主题"),
+      industry: z
+        .string()
+        .max(100)
+        .optional()
+        .describe("可选的行业，例如金融、医疗或 SaaS"),
     },
   },
   async ({ topic, industry }) =>
-    toTextResponse(
+    toSearchResponse(
       await searchWeb(`${topic}${industry ? ` ${industry}` : ""} best practices`, "best_practices"),
     ),
 );
@@ -227,12 +286,16 @@ server.registerTool(
     title: "搜索技术选型",
     description: "搜索某项技术在目标用例中的架构选择、实现模式和权衡。",
     inputSchema: {
-      technology: z.string().min(1).describe("待评估的技术、框架或协议"),
-      useCase: z.string().optional().describe("可选的目标用例或业务场景"),
+      technology: z.string().min(1).max(200).describe("待评估的技术、框架或协议"),
+      useCase: z
+        .string()
+        .max(200)
+        .optional()
+        .describe("可选的目标用例或业务场景"),
     },
   },
   async ({ technology, useCase }) =>
-    toTextResponse(
+    toSearchResponse(
       await searchWeb(`${technology}${useCase ? ` ${useCase}` : ""} technology stack`, "tech_stack"),
     ),
 );

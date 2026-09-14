@@ -17,20 +17,24 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const context = host.switchToHttp();
     const response = context.getResponse<Response>();
     const request = context.getRequest<Request>();
-    const status =
-      exception instanceof HttpException
-        ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR;
-    const exceptionResponse =
-      exception instanceof HttpException ? exception.getResponse() : undefined;
-    const message =
-      typeof exceptionResponse === "object" &&
-      exceptionResponse !== null &&
-      "message" in exceptionResponse
-        ? (exceptionResponse as { message: unknown }).message
-        : exception instanceof Error
-          ? exception.message
-          : "Internal server error";
+    const isHttpException = exception instanceof HttpException;
+    const status = isHttpException
+      ? exception.getStatus()
+      : HttpStatus.INTERNAL_SERVER_ERROR;
+
+    // 只有 HttpException 的 message 是「有意写给客户端看的」。
+    // 其余（PG 报错、库内部异常、JWT 验签细节等）一律收敛为通用文案，
+    // 详情只进服务端日志——traceId 已足以把用户报错与日志关联起来。
+    let message: unknown = "Internal server error";
+    if (isHttpException) {
+      const exceptionResponse = exception.getResponse();
+      message =
+        typeof exceptionResponse === "object" &&
+        exceptionResponse !== null &&
+        "message" in exceptionResponse
+          ? (exceptionResponse as { message: unknown }).message
+          : exception.message;
+    }
     const traceId = getTraceId();
 
     errorLog.error(

@@ -13,7 +13,10 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import { customType } from "drizzle-orm/pg-core";
-import { LOCAL_EMBEDDING_MODEL } from "../llm/embedding/model";
+import {
+  EMBEDDING_DIMENSION,
+  LOCAL_EMBEDDING_MODEL,
+} from "../llm/embedding/model";
 
 export type JsonValue =
   | string
@@ -23,16 +26,25 @@ export type JsonValue =
   | { [key: string]: JsonValue }
   | JsonValue[];
 
-const vector = customType<{ data: number[]; driverData: string }>({
-  dataType: () => "vector",
-  toDriver: (value) => `[${value.join(",")}]`,
-  fromDriver: (value) =>
-    String(value)
-      .slice(1, -1)
-      .split(",")
-      .filter(Boolean)
-      .map(Number),
-});
+/**
+ * pgvector 列类型。
+ *
+ * 必须带维度：`vector` 不带维度时 PostgreSQL 会接受任意长度的向量，维度不一致
+ * 只能等到检索时才暴露，那时脏数据已经落库。声明为 `vector(384)` 后，维度不符的
+ * INSERT 会被数据库直接拒绝。
+ */
+function vector(name: string) {
+  return customType<{ data: number[]; driverData: string }>({
+    dataType: () => `vector(${EMBEDDING_DIMENSION})`,
+    toDriver: (value) => `[${value.join(",")}]`,
+    fromDriver: (value) =>
+      String(value)
+        .slice(1, -1)
+        .split(",")
+        .filter(Boolean)
+        .map(Number),
+  })(name);
+}
 
 export const messageRoleEnum = pgEnum("MessageRole", ["USER", "ASSISTANT"]);
 export const taskStatusEnum = pgEnum("TaskStatus", [
@@ -183,7 +195,19 @@ export const documentChunks = pgTable(
       .default(LOCAL_EMBEDDING_MODEL)
       .notNull(),
   },
-  (table) => [uniqueIndex("document_chunks_documentId_chunkIndex_key").on(table.documentId, table.chunkIndex)],
+  (table) => [
+    uniqueIndex("document_chunks_documentId_chunkIndex_key").on(
+      table.documentId,
+      table.chunkIndex,
+    ),
+    // 向量检索索引：用余弦距离算子类与检索侧的 `<=>` 保持一致
+    // （pgvector >= 0.5.0 支持 hnsw）。必须放在迁移里，
+    // 否则 `drizzle-kit migrate` 部署出的库上所有 `embedding <=> $1` 都是全表扫描。
+    index("document_chunks_embedding_hnsw_idx").using(
+      "hnsw",
+      table.embedding.op("vector_cosine_ops"),
+    ),
+  ],
 );
 
 export const taskEvents = pgTable(

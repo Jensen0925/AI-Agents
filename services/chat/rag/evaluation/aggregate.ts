@@ -132,23 +132,43 @@ export function addOverallMetrics(
 export interface GateDecision {
   passed: boolean;
   failures: Array<{ metric: string; actual: number; threshold: number }>;
+  /** 允许缺失的维度：检索-only 模式没有 judge/intent 指标属于正常情况。 */
   skipped: string[];
+  /** 被声明为必需、但本轮完全没有产出的维度。 */
+  missing: string[];
+}
+
+export interface GateOptions {
+  /**
+   * 本轮必须产出的维度。缺失时计入 `missing` 并让 gate 失败，
+   * 避免「什么都没测」被判成通过：例如数据集里一个 `relevantChunkIds` 都没有时，
+   * recall/precision/ndcg/mrr 会全部落入 `skipped`，gate 仍然 passed。
+   */
+  required?: readonly string[];
 }
 
 /**
  * 仅判断本轮真正产出的维度。检索-only 模式没有 judge/intent 指标是正常情况，
- * 不会因为缺失 LLM 维度而失败。
+ * 不会因为缺失 LLM 维度而失败；但 `options.required` 里显式声明的维度缺失
+ * 会被视为失败。
  */
 export function gateDecision(
   summary: EvaluationSummary,
   gates: Readonly<Record<string, number>> = DEFAULT_EVAL_GATES,
+  options: GateOptions = {},
 ): GateDecision {
   const failures: GateDecision["failures"] = [];
   const skipped: string[] = [];
+  const missing: string[] = [];
+  const required = new Set(options.required ?? []);
   for (const [metric, threshold] of Object.entries(gates)) {
     const result = summary.overall.metrics[metric];
     if (!result || result.count === 0) {
-      skipped.push(metric);
+      if (required.has(metric)) {
+        missing.push(metric);
+      } else {
+        skipped.push(metric);
+      }
       continue;
     }
     if (result.average < threshold) {
@@ -156,5 +176,10 @@ export function gateDecision(
     }
   }
 
-  return { passed: failures.length === 0, failures, skipped };
+  return {
+    passed: failures.length === 0 && missing.length === 0,
+    failures,
+    skipped,
+    missing,
+  };
 }

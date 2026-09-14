@@ -51,4 +51,37 @@ describe("统一评测聚合与门禁", () => {
       threshold: 0.4,
     });
   });
+
+  it("声明为必需的维度若完全没产出，gate 必须失败而不是静默跳过", () => {
+    // 复现真实故障：数据集里没有任何 gold chunk id 时，四个检索维度全部缺失，
+    // 默认行为是全部 skipped + passed=true —— 一份什么都没测的绿色报告。
+    const emptySummary = aggregateEvaluation([
+      { id: "a", tags: [], metrics: {} },
+    ]);
+
+    const withoutRequirement = gateDecision(emptySummary, { recallAtK: 0.7 });
+    expect(withoutRequirement.passed).toBe(true);
+    expect(withoutRequirement.skipped).toEqual(["recallAtK"]);
+
+    const withRequirement = gateDecision(emptySummary, { recallAtK: 0.7 }, {
+      required: ["recallAtK"],
+    });
+    expect(withRequirement.passed).toBe(false);
+    expect(withRequirement.missing).toEqual(["recallAtK"]);
+    expect(withRequirement.skipped).toEqual([]);
+  });
+
+  it("必需维度已产出时仍按门槛正常判定", () => {
+    const summary = aggregateEvaluation([
+      { id: "a", tags: [], metrics: { recallAtK: 0.9 } },
+    ]);
+
+    expect(
+      gateDecision(summary, { recallAtK: 0.7 }, { required: ["recallAtK"] }).passed,
+    ).toBe(true);
+    expect(
+      gateDecision(summary, { recallAtK: 0.95 }, { required: ["recallAtK"] })
+        .passed,
+    ).toBe(false);
+  });
 });

@@ -18,10 +18,12 @@ import { AuthModule } from "./auth/auth.module";
 import { UsersModule } from "./users/users.module";
 import { RolesModule } from "./roles/roles.module";
 import { PermissionsModule } from "./permissions/permissions.module";
+import { SecurityModule } from "./security/security.module";
 import { AllExceptionsFilter } from "./observability/all-exceptions.filter";
 import { ResponseInterceptor } from "./observability/response.interceptor";
 import { TraceMiddleware } from "./observability/trace.middleware";
 import { closeMcp, initMcp } from "./mcp/mcp-bootstrap";
+import { disposeSharedCheckpointer } from "./llm/graph/checkpointer.provider";
 
 @Module({
   imports: [
@@ -36,6 +38,7 @@ import { closeMcp, initMcp } from "./mcp/mcp-bootstrap";
     UsersModule,
     RolesModule,
     PermissionsModule,
+    SecurityModule,
   ],
   controllers: [AppController],
   providers: [
@@ -56,6 +59,17 @@ export class AppModule
   }
 
   async onApplicationShutdown(): Promise<void> {
-    await closeMcp();
+    // 关闭顺序：先断开 MCP 子进程，再释放 LangGraph checkpointer 连接池。
+    // 任一环节失败都不能阻断另一个，否则重启会留下孤儿进程/连接。
+    try {
+      await closeMcp();
+    } catch (error) {
+      console.error("[shutdown] closeMcp failed", error);
+    }
+    try {
+      await disposeSharedCheckpointer();
+    } catch (error) {
+      console.error("[shutdown] disposeSharedCheckpointer failed", error);
+    }
   }
 }

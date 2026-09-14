@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { MessageRole } from "../src/database/schema";
-import { ConversationService } from "../src/conversation/conversation.service";
+import {
+  ConversationService,
+  MAX_CONVERSATION_PAGE_SIZE,
+} from "../src/conversation/conversation.service";
 import {
   createConversationTitle,
   DEFAULT_CONVERSATION_TITLE,
@@ -25,18 +28,18 @@ describe("conversation title", () => {
 
   it("derives display titles for legacy conversations still named 新会话", async () => {
     const database = createDatabaseMock({
-      select: [[
-        {
-          conversation: {
+      select: [
+        [
+          {
             id: "conversation-1",
             userId: "user-1",
             title: DEFAULT_CONVERSATION_TITLE,
             createdAt: new Date(),
             updatedAt: new Date(),
           },
-          firstMessage: "分析用户登录需求",
-        },
-      ]],
+        ],
+        [{ conversationId: "conversation-1", content: "分析用户登录需求" }],
+      ],
     });
     const service = new ConversationService(database);
 
@@ -44,6 +47,40 @@ describe("conversation title", () => {
 
     expect(conversations[0]?.title).toBe("分析用户登录需求");
     expect(conversations[0]).not.toHaveProperty("messages");
+  });
+
+  it("分页落在会话行上：limit/offset 直接传给会话查询，不做内存去重", async () => {
+    const database = createDatabaseMock({
+      select: [
+        [
+          { id: "c-2", userId: "user-1", title: "已命名会话", createdAt: new Date(), updatedAt: new Date() },
+          { id: "c-1", userId: "user-1", title: "另一个会话", createdAt: new Date(), updatedAt: new Date() },
+        ],
+      ],
+    });
+    const service = new ConversationService(database);
+
+    const conversations = await service.findByUser("user-1", { limit: 2, offset: 20 });
+
+    expect(conversations.map((conversation) => conversation.id)).toEqual(["c-2", "c-1"]);
+    // 标题都已持久化，不需要再查首条消息。
+    expect(database.db.selectDistinctOn).not.toHaveBeenCalled();
+    const selection = (database.db.select as ReturnType<typeof vi.fn>).mock.results[0]!
+      .value as Record<string, ReturnType<typeof vi.fn>>;
+    expect(selection.limit).toHaveBeenCalledWith(2);
+    expect(selection.offset).toHaveBeenCalledWith(20);
+  });
+
+  it("会话列表不受条数上限之外的放大：limit 超过上限时被收敛", async () => {
+    const database = createDatabaseMock({ select: [[]] });
+    const service = new ConversationService(database);
+
+    await service.findByUser("user-1", { limit: 10_000 });
+
+    const selection = (database.db.select as ReturnType<typeof vi.fn>).mock.results[0]!
+      .value as Record<string, ReturnType<typeof vi.fn>>;
+    expect(selection.limit).toHaveBeenCalledWith(MAX_CONVERSATION_PAGE_SIZE);
+    expect(database.db.selectDistinctOn).not.toHaveBeenCalled();
   });
 
   it("persists the generated title when the first user message is added", async () => {
