@@ -3,8 +3,13 @@ import {
   EmbeddingService,
   LOCAL_EMBEDDING_MODEL,
 } from "../llm/embedding/embedding.service";
+import { EMBEDDING_DIMENSION } from "../llm/embedding/model";
 
-export const DOCUMENT_EMBEDDING_DIMENSION = 384;
+/**
+ * 文档向量维度。与 `document_chunks.embedding` 的 `vector(384)` 列型、
+ * 以及 `EMBEDDING_DIMENSION` 保持同一来源，避免三处各自硬编码后漂移。
+ */
+export const DOCUMENT_EMBEDDING_DIMENSION = EMBEDDING_DIMENSION;
 export const DOCUMENT_EMBEDDING_MODEL = LOCAL_EMBEDDING_MODEL;
 
 /**

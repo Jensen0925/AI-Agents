@@ -194,8 +194,24 @@ export class ConversationController {
   }
 
   @Get()
-  findByUser(@Req() request: AuthenticatedRequest) {
-    return this.conversationService.findByUser(currentUserId(request));
+  findByUser(
+    @Req() request: AuthenticatedRequest,
+    @Query("limit") rawLimit?: string,
+    @Query("offset") rawOffset?: string,
+  ) {
+    const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+    if (limit !== undefined && (!Number.isFinite(limit) || limit < 1)) {
+      throw new BadRequestException("limit must be a positive number");
+    }
+    const offset = rawOffset === undefined ? undefined : Number(rawOffset);
+    if (offset !== undefined && (!Number.isFinite(offset) || offset < 0)) {
+      throw new BadRequestException("offset must not be negative");
+    }
+
+    return this.conversationService.findByUser(currentUserId(request), {
+      limit,
+      offset,
+    });
   }
 
   @Get(":id/messages")

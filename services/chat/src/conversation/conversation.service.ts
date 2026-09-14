@@ -1,11 +1,15 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { DatabaseService } from "../database/database.service";
-import { conversations, messages } from "../database/schema";
+import { conversations, messages, MessageRole } from "../database/schema";
 import {
   createConversationTitle,
   DEFAULT_CONVERSATION_TITLE,
 } from "./conversation-title";
+
+/** 会话列表默认条数与单次上限，避免一次拉回全部会话。 */
+export const DEFAULT_CONVERSATION_PAGE_SIZE = 100;
+export const MAX_CONVERSATION_PAGE_SIZE = 200;
 
 /** 管理用户会话，并在所有单条记录操作中强制校验会话归属。 */
 @Injectable()
@@ -22,23 +26,63 @@ export class ConversationService {
   }
 
   /**
-   * 按最近更新时间倒序返回用户拥有的全部会话。
+   * 按最近更新时间倒序返回用户拥有的会话，limit/offset 直接作用于会话行本身。
    *
-   * 旧会话可能已经保存为“新会话”，这里使用首条用户消息即时补足展示标题；
-   * 新消息则会在 MessageService 写入时持久化标题，因此不会影响已有会话排序。
+   * 分页必须落在 conversations 上：会话与消息是一对多关系，先 join 消息再去重会让
+   * offset 按「消息行」计数，页大小完全失真。因此先取一页会话，再单独查询这一页里
+   * 仍是默认标题的会话，用其首条用户消息推导展示标题。
    */
-  async findByUser(userId: string) {
+  async findByUser(
+    userId: string,
+    options: { limit?: number; offset?: number } = {},
+  ) {
+    const limit = Math.min(
+      MAX_CONVERSATION_PAGE_SIZE,
+      Math.max(1, Number(options.limit) || DEFAULT_CONVERSATION_PAGE_SIZE),
+    );
+    const offset = Math.max(0, Number(options.offset) || 0);
+
     const rows = await this.database.db
-      .select({ conversation: conversations, firstMessage: messages.content })
+      .select()
       .from(conversations)
-      .innerJoin(messages, eq(messages.conversationId, conversations.id))
-      .where(and(eq(conversations.userId, userId), eq(messages.role, "USER")))
-      .orderBy(desc(conversations.updatedAt), asc(messages.createdAt), asc(messages.id));
-    const found = new Set<string>();
-    return rows.flatMap(({ conversation, firstMessage }) => {
-      if (found.has(conversation.id)) return [];
-      found.add(conversation.id);
-      return [{ ...conversation, title: conversation.title === DEFAULT_CONVERSATION_TITLE ? createConversationTitle(firstMessage) : conversation.title }];
+      .where(eq(conversations.userId, userId))
+      .orderBy(desc(conversations.updatedAt), desc(conversations.id))
+      .limit(limit)
+      .offset(offset);
+    if (rows.length === 0) return [];
+
+    const untitledIds = rows
+      .filter((row) => row.title === DEFAULT_CONVERSATION_TITLE)
+      .map((row) => row.id);
+    // DISTINCT ON 依赖 (conversationId, createdAt) 索引，按会话分组后只留最早一条用户消息。
+    const firstMessages = untitledIds.length
+      ? await this.database.db
+          .selectDistinctOn([messages.conversationId], {
+            conversationId: messages.conversationId,
+            content: messages.content,
+          })
+          .from(messages)
+          .where(
+            and(
+              inArray(messages.conversationId, untitledIds),
+              eq(messages.role, MessageRole.USER),
+            ),
+          )
+          .orderBy(messages.conversationId, asc(messages.createdAt), asc(messages.id))
+      : [];
+    const firstMessageById = new Map(
+      firstMessages.map((row) => [row.conversationId, row.content]),
+    );
+
+    return rows.map((conversation) => {
+      const firstMessage = firstMessageById.get(conversation.id);
+      return {
+        ...conversation,
+        title:
+          conversation.title === DEFAULT_CONVERSATION_TITLE && firstMessage
+            ? createConversationTitle(firstMessage)
+            : conversation.title,
+      };
     });
   }
 

@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import {
   BadRequestException,
   ConflictException,
@@ -60,7 +60,12 @@ export const ALLOWED_DOCUMENT_MIME_TYPES = new Set([
   "application/msword",
 ]);
 
-/** 对话附件在文档类型之外额外允许常见图片，便于随消息发送截图。 */
+/**
+ * 对话附件在文档类型之外额外允许常见图片，便于随消息发送截图。
+ *
+ * 注意：允许**上传**不等于允许**内联回显**。`image/svg+xml` 可内嵌脚本，
+ * 回读时必须强制下载（见 INLINE_SAFE_MIME_TYPES）。
+ */
 export const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
   ...ALLOWED_DOCUMENT_MIME_TYPES,
   "image/png",
@@ -73,6 +78,133 @@ export const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
 ]);
 
 export const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+
+/**
+ * 允许以内联（`Content-Disposition: inline`）方式返回给浏览器的类型白名单。
+ *
+ * 只有浏览器不会执行脚本的位图与纯文本可以内联。`image/svg+xml` 虽然在上传
+ * 白名单里（便于随消息发矢量图），但**绝不能内联**：SVG 可以内嵌 `<script>`，
+ * 同源打开时会以应用 origin 执行脚本，直接读走 localStorage 里的令牌。
+ * 其余类型（含 SVG、Word、HEIC）一律强制下载。
+ */
+export const INLINE_SAFE_MIME_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+  "text/plain",
+]);
+
+/** 归一化 MIME（去掉 `;charset=...` 等参数）后判断是否可安全内联。 */
+export function isInlineSafeMimeType(mimeType: string): boolean {
+  const normalized = normalizeMimeType(mimeType);
+  return INLINE_SAFE_MIME_TYPES.has(normalized);
+}
+
+/** 去掉 `;charset=...` 等参数并统一小写，便于比较。 */
+function normalizeMimeType(mimeType: string): string {
+  return (mimeType.split(";")[0] ?? "").trim().toLowerCase();
+}
+
+const ZIP_SIGNATURE = [0x50, 0x4b, 0x03, 0x04] as const;
+const OLE2_SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1] as const;
+const PDF_SIGNATURE = [0x25, 0x50, 0x44, 0x46, 0x2d] as const;
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] as const;
+const JPEG_SIGNATURE = [0xff, 0xd8, 0xff] as const;
+const RIFF_SIGNATURE = [0x52, 0x49, 0x46, 0x46] as const;
+const WEBP_SIGNATURE = [0x57, 0x45, 0x42, 0x50] as const;
+const FTYP_SIGNATURE = [0x66, 0x74, 0x79, 0x70] as const;
+const GIF_SIGNATURES = [
+  [0x47, 0x49, 0x46, 0x38, 0x37, 0x61],
+  [0x47, 0x49, 0x46, 0x38, 0x39, 0x61],
+] as const;
+/** ISO-BMFF 的 major brand：HEIF/HEIC 家族。 */
+const HEIC_BRANDS = new Set(["heic", "heix", "hevc", "heim", "heis", "hevm", "hevs", "mif1", "msf1"]);
+
+function startsWithBytes(buffer: Buffer, signature: readonly number[], offset = 0): boolean {
+  if (buffer.length < offset + signature.length) return false;
+  return signature.every((byte, index) => buffer[offset + index] === byte);
+}
+
+/** SVG 是文本格式，没有固定魔数：跳过 BOM 与空白后应落在 XML 声明、DOCTYPE 或 `<svg` 上。 */
+function looksLikeSvg(head: Buffer): boolean {
+  const text = head.toString("utf8").replace(/^\uFEFF/u, "").trimStart().toLowerCase();
+  return text.startsWith("<?xml") || text.startsWith("<!doctype") || text.startsWith("<svg");
+}
+
+/**
+ * 校验文件真实内容与声明的 MIME 是否一致。
+ *
+ * `file.mimetype` 完全来自客户端请求头，改一个 header 就能把任意内容声明成白名单类型。
+ * 落盘前按文件头魔数再校验一次，把「声明的类型」与「真实字节」对齐；无法识别的文本类型
+ * 至少要保证不含 NUL 字节，避免二进制内容被当作纯文本存储与检索。
+ */
+export function matchesDeclaredMimeType(mimeType: string, buffer: Buffer): boolean {
+  const head = buffer.subarray(0, 512);
+  switch (normalizeMimeType(mimeType)) {
+    case "application/pdf":
+      return startsWithBytes(head, PDF_SIGNATURE);
+    case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+      return startsWithBytes(head, ZIP_SIGNATURE);
+    case "application/msword":
+      return startsWithBytes(head, OLE2_SIGNATURE);
+    case "image/png":
+      return startsWithBytes(head, PNG_SIGNATURE);
+    case "image/jpeg":
+    case "image/jpg":
+      return startsWithBytes(head, JPEG_SIGNATURE);
+    case "image/gif":
+      return GIF_SIGNATURES.some((signature) => startsWithBytes(head, signature));
+    case "image/webp":
+      return (
+        startsWithBytes(head, RIFF_SIGNATURE) && startsWithBytes(head, WEBP_SIGNATURE, 8)
+      );
+    case "image/heic":
+      return (
+        startsWithBytes(head, FTYP_SIGNATURE, 4) &&
+        HEIC_BRANDS.has(head.subarray(8, 12).toString("latin1"))
+      );
+    case "image/svg+xml":
+      return looksLikeSvg(head);
+    default:
+      return !head.includes(0);
+  }
+}
+
+/** 按 RFC 5987 编码文件名，供 Content-Disposition 使用。 */
+function encodeFilename(filename: string): string {
+  return encodeURIComponent(filename).replace(
+    /['()]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+/**
+ * 构造文件回读响应头。
+ *
+ * 非内联安全类型除了强制 `attachment` 之外，再加一层 CSP `sandbox`：
+ * 即使某个浏览器忽略 Content-Disposition，sandbox 也会让内容落在不透明源中
+ * 且不执行脚本，无法访问本站的 localStorage。
+ */
+export function buildFileResponseHeaders(input: {
+  mimeType: string;
+  filename: string;
+  size: number;
+}): Record<string, string> {
+  const inlineSafe = isInlineSafeMimeType(input.mimeType);
+  const headers: Record<string, string> = {
+    "Cache-Control": "private, no-store",
+    "Content-Disposition": `${inlineSafe ? "inline" : "attachment"}; filename*=UTF-8''${encodeFilename(input.filename)}`,
+    "Content-Length": String(input.size),
+    "Content-Type": input.mimeType,
+    "X-Content-Type-Options": "nosniff",
+  };
+  if (!inlineSafe) {
+    headers["Content-Security-Policy"] = "sandbox; default-src 'none'";
+  }
+  return headers;
+}
 
 /** 对话附件的落盘结果；id 即相对 uploads 根目录的路径，用于回读。 */
 export interface AttachmentRecord {
@@ -259,6 +391,7 @@ export class DocumentService {
         `Unsupported attachment type: ${file.mimetype}`,
       );
     }
+    this.assertContentMatchesMimeType(file.mimetype, file.buffer);
     if (file.size <= 0) {
       throw new BadRequestException("Attachment must not be empty");
     }
@@ -401,28 +534,39 @@ export class DocumentService {
     }
   }
 
-  /** 校验文档归属后删除物理文件和数据库记录。 */
+  /** 校验文档归属后删除数据库记录与物理文件。 */
   async delete(documentId: string, userId: string): Promise<Document> {
     const document = await this.findById(documentId, userId);
+
+    // 先删记录（级联清理 document_chunks），再删物理文件。顺序不能颠倒：
+    // 文件先删会在删记录失败时留下「列表有条目、预览 404」的悬空记录，
+    // 处理中被删除还会撞上 chunk 的外键约束。
+    const [deleted] = await this.database.db
+      .delete(documents)
+      .where(eq(documents.id, documentId))
+      .returning();
+    if (!deleted) {
+      throw new NotFoundException("Document not found");
+    }
+
     if (document.filePath) {
       const absolutePath = this.resolveStoredPath(document.filePath);
       await unlink(absolutePath).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== "ENOENT") {
-          throw error;
+          // 记录已删除，残留文件只占磁盘，不应让接口失败，但必须留痕。
+          this.logger.warn(
+            `Failed to remove file for document ${documentId}: ${error.message}`,
+          );
         }
       });
 
-      // 仅在目录为空时删除用户目录；rm 失败不会影响文档删除。
+      // 仅在目录为空时删除用户目录；rm 失败不影响删除结果。
       await rm(resolve(absolutePath, ".."), { recursive: false }).catch(
         () => undefined,
       );
     }
 
-    const [deleted] = await this.database.db
-      .delete(documents)
-      .where(eq(documents.id, documentId))
-      .returning();
-    return deleted!;
+    return deleted;
   }
 
   /**
@@ -434,17 +578,23 @@ export class DocumentService {
     status: "processing";
   }> {
     const document = await this.findById(documentId, userId);
-    if (document.status === "processing") {
-      throw new ConflictException("Document is already being processed");
-    }
     if (!document.filePath) {
       throw new BadRequestException("Document has no local file");
     }
 
-    await this.database.db
+    // 条件更新把「判断未在处理」与「置为 processing」合成一条语句。
+    // 分成先查后写时，两次并发点击都能通过检查、各自起一个处理任务。
+    const [started] = await this.database.db
       .update(documents)
       .set({ status: "processing", chunkCount: 0 })
-      .where(eq(documents.id, document.id));
+      .where(
+        and(eq(documents.id, document.id), ne(documents.status, "processing")),
+      )
+      .returning({ id: documents.id });
+
+    if (!started) {
+      throw new ConflictException("Document is already being processed");
+    }
 
     // 将耗时的解析与本地模型推理移出请求生命周期，接口可立即返回 202。
     setImmediate(() => {
@@ -461,7 +611,7 @@ export class DocumentService {
     return { id: document.id, status: "processing" };
   }
 
-  /** 在服务层再次校验 MIME、空文件和 10MB 限制，避免绕过 Multer。 */
+  /** 在服务层再次校验 MIME、真实文件头、空文件和 10MB 限制，避免绕过 Multer。 */
   private validateFile(file: UploadedDocumentFile): void {
     if (!file?.buffer || !Buffer.isBuffer(file.buffer)) {
       throw new BadRequestException("A file is required");
@@ -471,11 +621,21 @@ export class DocumentService {
         `Unsupported file type: ${file.mimetype}`,
       );
     }
+    this.assertContentMatchesMimeType(file.mimetype, file.buffer);
     if (file.size <= 0) {
       throw new BadRequestException("File must not be empty");
     }
     if (file.size > MAX_DOCUMENT_SIZE || file.buffer.length > MAX_DOCUMENT_SIZE) {
       throw new BadRequestException("File size must not exceed 10MB");
+    }
+  }
+
+  /** 声明类型与文件头不一致时拒绝，错误信息不回显内容以免被当作探测工具。 */
+  private assertContentMatchesMimeType(mimeType: string, buffer: Buffer): void {
+    if (!matchesDeclaredMimeType(mimeType, buffer)) {
+      throw new UnsupportedMediaTypeException(
+        `File content does not match the declared type: ${mimeType}`,
+      );
     }
   }
 

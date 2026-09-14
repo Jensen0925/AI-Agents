@@ -26,6 +26,7 @@ import {
 } from "../auth/jwt-auth.guard";
 import {
   ALLOWED_DOCUMENT_MIME_TYPES,
+  buildFileResponseHeaders,
   DocumentService,
   MAX_DOCUMENT_SIZE,
   type UploadedDocumentFile,
@@ -141,18 +142,15 @@ export class DocumentController {
       requireId(documentId),
       currentUserId(request),
     );
-    const encodedFilename = encodeURIComponent(preview.filename).replace(
-      /['()]/g,
-      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-    );
 
-    response.set({
-      "Cache-Control": "private, no-store",
-      "Content-Disposition": `inline; filename*=UTF-8''${encodedFilename}`,
-      "Content-Length": String(preview.buffer.length),
-      "Content-Type": preview.mimeType,
-      "X-Content-Type-Options": "nosniff",
-    });
+    // 同 attachment 端点：可执行脚本的类型不允许内联返回。
+    response.set(
+      buildFileResponseHeaders({
+        mimeType: preview.mimeType,
+        filename: preview.filename,
+        size: preview.buffer.length,
+      }),
+    );
 
     return new StreamableFile(preview.buffer);
   }

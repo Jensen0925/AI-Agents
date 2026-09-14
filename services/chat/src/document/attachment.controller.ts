@@ -22,6 +22,7 @@ import {
 } from "../auth/jwt-auth.guard";
 import {
   ALLOWED_ATTACHMENT_MIME_TYPES,
+  buildFileResponseHeaders,
   DocumentService,
   MAX_ATTACHMENT_SIZE,
   type UploadedDocumentFile,
@@ -93,18 +94,16 @@ export class AttachmentController {
       currentUserId(request),
       attachmentId,
     );
-    const encodedFilename = encodeURIComponent(attachment.filename).replace(
-      /['()]/g,
-      (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
-    );
 
-    response.set({
-      "Cache-Control": "private, no-store",
-      "Content-Disposition": `inline; filename*=UTF-8''${encodedFilename}`,
-      "Content-Length": String(attachment.buffer.length),
-      "Content-Type": attachment.mimeType,
-      "X-Content-Type-Options": "nosniff",
-    });
+    // Content-Disposition 由 MIME 决定：SVG 等可执行脚本的类型强制下载，
+    // 不能内联返回（见 document.service.ts 的 INLINE_SAFE_MIME_TYPES）。
+    response.set(
+      buildFileResponseHeaders({
+        mimeType: attachment.mimeType,
+        filename: attachment.filename,
+        size: attachment.buffer.length,
+      }),
+    );
 
     return new StreamableFile(attachment.buffer);
   }
