@@ -6,6 +6,7 @@ import {
 import { and, asc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { DatabaseService } from "../database/database.service";
+import { isUniqueViolation } from "../database/pg-errors";
 import { categories, documents } from "../database/schema";
 
 const MAX_CATEGORY_NAME_LENGTH = 30;
@@ -63,20 +64,29 @@ export class CategoryService {
       );
     }
 
-    const [created] = await this.database.db
-      .insert(categories)
-      .values({ id: randomUUID(), userId, name: normalized })
-      .returning({
-        id: categories.id,
-        name: categories.name,
-        createdAt: categories.createdAt,
-      });
+    try {
+      const [created] = await this.database.db
+        .insert(categories)
+        .values({ id: randomUUID(), userId, name: normalized })
+        .returning({
+          id: categories.id,
+          name: categories.name,
+          createdAt: categories.createdAt,
+        });
 
-    return {
-      id: created.id,
-      name: created.name,
-      createdAt: created.createdAt.toISOString(),
-    };
+      return {
+        id: created.id,
+        name: created.name,
+        createdAt: created.createdAt.toISOString(),
+      };
+    } catch (error) {
+      // 上面的重名预检存在「先查后插」竞态：两个并发请求可能同时通过检查，
+      // 第二个在唯一约束上失败。这里把 PG 23505 转成 400，而不是泄漏成 500。
+      if (isUniqueViolation(error)) {
+        throw new BadRequestException("该分类已存在");
+      }
+      throw error;
+    }
   }
 
   /**
@@ -89,27 +99,34 @@ export class CategoryService {
       throw new BadRequestException("id must be a non-empty string");
     }
 
-    const reassigned = await this.database.db
-      .update(documents)
-      .set({ category: FALLBACK_CATEGORY })
-      .where(
-        and(
-          eq(documents.userId, userId),
-          eq(documents.category, normalizedId),
-        ),
-      )
-      .returning({ id: documents.id });
+    // 事务：先校验分类存在并删除，再回落仍引用它的文档。顺序不能颠倒——
+    // 反过来会在分类删除失败（404）时已经把文档分类改成 FALLBACK，
+    // 静默破坏用户的分类归属。
+    return this.database.db.transaction(async (transaction) => {
+      const deleted = await transaction
+        .delete(categories)
+        .where(
+          and(eq(categories.id, normalizedId), eq(categories.userId, userId)),
+        )
+        .returning({ id: categories.id });
 
-    const deleted = await this.database.db
-      .delete(categories)
-      .where(and(eq(categories.id, normalizedId), eq(categories.userId, userId)))
-      .returning({ id: categories.id });
+      if (deleted.length === 0) {
+        throw new NotFoundException("分类不存在");
+      }
 
-    if (deleted.length === 0) {
-      throw new NotFoundException("分类不存在");
-    }
+      const reassigned = await transaction
+        .update(documents)
+        .set({ category: FALLBACK_CATEGORY })
+        .where(
+          and(
+            eq(documents.userId, userId),
+            eq(documents.category, normalizedId),
+          ),
+        )
+        .returning({ id: documents.id });
 
-    return { reassigned: reassigned.length };
+      return { reassigned: reassigned.length };
+    });
   }
 
   /** 自定义分类 id 是否属于该用户，用于校验文档归类时的取值。 */

@@ -28,6 +28,8 @@ export interface DocumentSearchResult {
   id?: string;
   /** 命中片段所属文档，供前端定位来源文档（全局检索面板据此跳转预览）。 */
   documentId?: string;
+  /** 片段在所属文档中的序号，用于来源定位与评测对齐。 */
+  chunkIndex?: number;
   content: string;
   score: number;
 }
@@ -36,6 +38,15 @@ export type RetrievalScope =
   | { mode: "all" }
   | { mode: "category"; value: string }
   | { mode: "documents"; ids: string[] };
+
+/**
+ * 检索降级回调。
+ *
+ * 检索失败时返回空数组会让「基础设施故障」与「该用户确实没有相关资料」变得
+ * 完全同形——上游会把故障渲染成「知识库没有检索到相关文档」，模型据此产出
+ * 事实性错误的结论。因此把降级原因显式回调给上游，由上游决定如何标注。
+ */
+export type RetrievalDegradedReporter = (reason: string) => void;
 
 /** 一次检索可限定的文档数量上限，防止 IN (...) 条件被撑爆。 */
 export const MAX_SCOPE_DOCUMENTS = 50;
@@ -116,6 +127,20 @@ function scopeCondition(scope: RetrievalScope | undefined, userId: string): SQL 
 const BM25_CORPUS_CAP = 500;
 const DEFAULT_RETRIEVAL_TIMEOUT_MS = 8_000;
 
+/**
+ * 取出 `db.execute()` 结果里的数据行。
+ *
+ * node-postgres 驱动下 `db.execute()` 返回 pg 的 `QueryResult`，行挂在 `.rows`
+ * 上而不是裸数组。直接当数组使用会抛 `rows.map is not a function`，并被本文件
+ * 的降级逻辑吞成「检索不可用」→ 检索结果恒为空。这里同时兼容数组形态，
+ * 便于替换为其它驱动或测试替身。
+ */
+function resultRows<T>(result: unknown): T[] {
+  if (Array.isArray(result)) return result as T[];
+  const rows = (result as { rows?: unknown } | null)?.rows;
+  return Array.isArray(rows) ? (rows as T[]) : [];
+}
+
 /** 使用 PostgreSQL pgvector 在当前用户的文档块中执行语义检索。 */
 @Injectable()
 export class SearchService {
@@ -135,6 +160,7 @@ export class SearchService {
     userId: string,
     topK: number,
     scope?: RetrievalScope,
+    onDegraded?: RetrievalDegradedReporter,
   ): Promise<DocumentSearchResult[]> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) {
@@ -167,8 +193,9 @@ export class SearchService {
       }
 
       const vectorLiteral = `[${queryVector.join(",")}]`;
-      const rows = (await this.database.db.execute(
-        sql<RawSimilarityResult>`
+      const rows = resultRows<RawSimilarityResult>(
+        await this.database.db.execute(
+          sql<RawSimilarityResult>`
         SELECT
           chunks."id",
           chunks."documentId" AS "documentId",
@@ -182,7 +209,8 @@ export class SearchService {
         ORDER BY chunks."embedding" <=> ${vectorLiteral}::vector
         LIMIT ${limit}
       `,
-      )) as unknown as RawSimilarityResult[];
+        ),
+      );
 
       const { minScore } = loadLangchainConfig().retrieval;
 
@@ -192,57 +220,64 @@ export class SearchService {
           ...(typeof row.documentId === "string"
             ? { documentId: row.documentId }
             : {}),
+          ...(row.chunkIndex === undefined || row.chunkIndex === null
+            ? {}
+            : Number.isFinite(Number(row.chunkIndex))
+              ? { chunkIndex: Number(row.chunkIndex) }
+              : {}),
           content: row.content,
           score: Number(row.score),
         }))
         .filter((row) => Number.isFinite(row.score) && row.score >= minScore);
     } catch (error) {
       // 检索是增强能力，不应阻断核心对话。常见原因包括本地模型尚未
-      // 下载、网络不可达或 pgvector 尚未启用；记录日志后按“无上下文”继续。
+      // 下载、网络不可达或 pgvector 尚未启用；记录日志后按“无上下文”继续，
+      // 但必须通过 onDegraded 把「这是故障而非空结果」告知上游。
+      const reason = error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `Semantic retrieval unavailable; continuing without context: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Semantic retrieval unavailable; continuing without context: ${reason}`,
       );
+      onDegraded?.(reason);
       return [];
     }
   }
 
   /**
    * 主链路检索入口。hybrid 模式先并行执行向量与 BM25 召回，采用 RRF 融合，
-   * 再用 embedding 余弦重排；任一路失败或超时都会回退到已有的向量检索结果。
+   * 再用 embedding 余弦重排；任一路失败或超时都会回退到向量检索。
    */
   async search(
     query: string,
     userId: string,
     topK: number,
     scope?: RetrievalScope,
+    onDegraded?: RetrievalDegradedReporter,
   ): Promise<DocumentSearchResult[]> {
     let config: ReturnType<typeof loadLangchainConfig>["retrieval"];
     try {
       config = loadLangchainConfig().retrieval;
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `Retrieval config unavailable; using vector search: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Retrieval config unavailable; using vector search: ${reason}`,
       );
-      return this.similaritySearch(query, userId, topK);
+      onDegraded?.(`retrieval config unavailable: ${reason}`);
+      return this.similaritySearch(query, userId, topK, scope, onDegraded);
     }
 
     const timeoutMs = config.timeoutMs ?? DEFAULT_RETRIEVAL_TIMEOUT_MS;
     try {
       return await this.withTimeout(
-        this.runSearch(query, userId, topK, config.mode, scope),
+        this.runSearch(query, userId, topK, config.mode, scope, onDegraded),
         timeoutMs,
       );
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       this.logger.warn(
-        `Hybrid retrieval unavailable; falling back to vector search: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Hybrid retrieval unavailable; falling back to vector search: ${reason}`,
       );
-      return this.similaritySearch(query, userId, topK);
+      onDegraded?.(`hybrid retrieval failed: ${reason}`);
+      return this.similaritySearch(query, userId, topK, scope, onDegraded);
     }
   }
 
@@ -252,14 +287,17 @@ export class SearchService {
     topK: number,
     mode: "simple" | "hybrid",
     scope?: RetrievalScope,
+    onDegraded?: RetrievalDegradedReporter,
   ): Promise<DocumentSearchResult[]> {
     if (mode === "simple") {
-      return this.similaritySearch(query, userId, topK, scope);
+      return this.similaritySearch(query, userId, topK, scope, onDegraded);
     }
 
     const wideK = Math.max(1, Math.floor(topK)) * 3;
     const vectorSearch = async (): Promise<RetrievalResult[]> =>
-      this.toRetrievalResults(await this.similaritySearch(query, userId, wideK, scope));
+      this.toRetrievalResults(
+        await this.similaritySearch(query, userId, wideK, scope, onDegraded),
+      );
     const keywordSearch = async (): Promise<RetrievalResult[]> =>
       bm25Search(query, await this.fetchUserChunks(userId, scope), wideK);
     const candidates = await hybridSearch(query, vectorSearch, keywordSearch, wideK);
@@ -271,21 +309,23 @@ export class SearchService {
       (texts) => this.embeddingService.embedTexts(texts),
       topK,
     );
-    return reranked.map(
-      ({ chunkId, documentId, chunkIndex: _chunkIndex, ...result }) => ({
-        id: chunkId,
-        ...(typeof documentId === "string" ? { documentId } : {}),
-        ...result,
-      }),
-    );
+    return reranked.map(({ chunkId, documentId, chunkIndex, ...result }) => ({
+      id: chunkId,
+      ...(typeof documentId === "string" ? { documentId } : {}),
+      ...(Number.isFinite(chunkIndex) ? { chunkIndex } : {}),
+      ...result,
+    }));
   }
 
   private async fetchUserChunks(
     userId: string,
     scope?: RetrievalScope,
   ): Promise<RetrievalResult[]> {
-    const rows = (await this.database.db.execute(
-      sql<RawSimilarityResult>`
+    // ORDER BY 必须确定：只写 LIMIT 会让 PostgreSQL 返回任意行，同一 query
+    // 两次请求可能命中不同语料，BM25 结果因而不可复现、评测无法对齐。
+    const rows = resultRows<RawSimilarityResult>(
+      await this.database.db.execute(
+        sql<RawSimilarityResult>`
       SELECT
         chunks."id",
         chunks."documentId" AS "documentId",
@@ -296,9 +336,11 @@ export class SearchService {
       INNER JOIN "documents" AS documents
         ON documents."id" = chunks."documentId"
       WHERE ${scopeCondition(scope, userId)}
+      ORDER BY chunks."documentId", chunks."chunkIndex"
       LIMIT ${BM25_CORPUS_CAP}
     `,
-    )) as unknown as RawSimilarityResult[];
+      ),
+    );
 
     return rows.flatMap((row: RawSimilarityResult) => {
       if (typeof row.id !== "string" || typeof row.documentId !== "string") {
@@ -315,6 +357,13 @@ export class SearchService {
     });
   }
 
+  /**
+   * 把向量检索结果转换为融合算法所需的统一结构。
+   *
+   * documentId / chunkIndex 必须透传真实值：RRF 融合保留的是「向量侧优先」的
+   * 结果对象，若这里写死占位值，最终返回给前端的来源信息就会失真
+   * （前端无法跳转到来源文档，检索评测也无法与 golden 对齐）。
+   */
   private toRetrievalResults(
     results: DocumentSearchResult[],
   ): RetrievalResult[] {
@@ -322,9 +371,9 @@ export class SearchService {
       result.id
         ? [{
             chunkId: result.id,
-            documentId: "unknown",
+            documentId: result.documentId ?? "unknown",
             content: result.content,
-            chunkIndex: index,
+            chunkIndex: result.chunkIndex ?? index,
             score: result.score,
           }]
         : [],

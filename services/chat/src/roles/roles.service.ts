@@ -1,6 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { count, eq, or } from "drizzle-orm";
 import { DatabaseService } from "../database/database.service";
+import { isUniqueViolation } from "../database/pg-errors";
 import { permissions, rolePermissions, roles, userRoles } from "../database/schema";
 
 interface RoleInput {
@@ -28,25 +29,40 @@ export class RolesService {
   async create(input: RoleInput) {
     if (!input.code || !input.name) throw new ConflictException("code、name 均为必填");
     try {
-      const [role] = await this.database.db.insert(roles).values({ id: crypto.randomUUID(), code: input.code.trim(), name: input.name.trim(), description: input.description?.trim(), updatedAt: new Date() }).returning();
-      if (input.permissionIds?.length) await this.database.db.insert(rolePermissions).values(input.permissionIds.map((permissionId) => ({ roleId: role!.id, permissionId })));
-      return (await this.withRelations([role!]))[0];
+      // 角色与权限必须一起提交：否则 permissionIds 含非法 ID 时外键报错，
+      // 会留下一个已入库但没有任何权限的角色。
+      const roleId = await this.database.db.transaction(async (transaction) => {
+        const [role] = await transaction.insert(roles).values({ id: crypto.randomUUID(), code: input.code!.trim(), name: input.name!.trim(), description: input.description?.trim(), updatedAt: new Date() }).returning();
+        if (!role) throw new Error("Unable to create role");
+        if (input.permissionIds?.length) {
+          await transaction.insert(rolePermissions).values(input.permissionIds.map((permissionId) => ({ roleId: role.id, permissionId })));
+        }
+        return role.id;
+      });
+      return await this.findById(roleId);
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "23505") throw new ConflictException("角色编码已存在");
+      if (isUniqueViolation(error)) throw new ConflictException("角色编码已存在");
       throw error;
     }
   }
 
   async update(id: string, input: RoleInput) {
     await this.findById(id);
-    const [role] = await this.database.db.update(roles).set({ code: input.code?.trim(), name: input.name?.trim(), description: input.description?.trim(), updatedAt: new Date() }).where(eq(roles.id, id)).returning();
-    if (input.permissionIds) {
-      await this.database.db.transaction(async (transaction) => {
+    // 字段更新与权限替换必须原子：否则权限替换失败会留下「字段已改、权限没动」的不一致状态。
+    await this.database.db.transaction(async (transaction) => {
+      await transaction.update(roles).set({ code: input.code?.trim(), name: input.name?.trim(), description: input.description?.trim(), updatedAt: new Date() }).where(eq(roles.id, id));
+      if (input.permissionIds) {
         await transaction.delete(rolePermissions).where(eq(rolePermissions.roleId, id));
-        if (input.permissionIds!.length) await transaction.insert(rolePermissions).values(input.permissionIds!.map((permissionId) => ({ roleId: id, permissionId })));
-      });
-    }
-    return (await this.withRelations([role!]))[0];
+        if (input.permissionIds.length) {
+          await transaction.insert(rolePermissions).values(input.permissionIds.map((permissionId) => ({ roleId: id, permissionId })));
+        }
+      }
+    }).catch((error: unknown) => {
+      if (isUniqueViolation(error)) throw new ConflictException("角色编码已存在");
+      throw error;
+    });
+    // 重新读取，避免把事务前的快照当作更新结果返回。
+    return await this.findById(id);
   }
 
   async remove(id: string) {
