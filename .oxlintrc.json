@@ -19,7 +19,6 @@
     "**/coverage/**",
     "**/*.config.{js,ts,mjs,cjs}",
     "**/uploads/**",
-    "**/eval/**",
     "**/drizzle/**",
     "**/next-env.d.ts"
   ],
