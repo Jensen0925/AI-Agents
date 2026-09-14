@@ -1,6 +1,21 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { clearSession, getSession, saveSession, type Session } from "./auth";
 
+declare module "axios" {
+  export interface AxiosRequestConfig {
+    /**
+     * 该请求由后台/局部面板发起。返回 403 时只让局部功能降级，
+     * 不整页跳转到 /forbidden（避免丢弃用户正在编辑的表单状态）。
+     */
+    skipAuthRedirect?: boolean;
+  }
+}
+
+type RetryableConfig = InternalAxiosRequestConfig & {
+  _retry?: boolean;
+  skipAuthRedirect?: boolean;
+};
+
 export const api = axios.create({ baseURL: "/api", headers: { "Content-Type": "application/json" } });
 let refreshPromise: Promise<Session | null> | null = null;
 
@@ -12,9 +27,11 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 api.interceptors.response.use((response) => response, async (error: AxiosError<{ message?: string }>) => {
   const status = error.response?.status;
-  const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
+  const original = error.config as RetryableConfig | undefined;
   if (status === 403 && typeof window !== "undefined") {
-    window.location.assign("/forbidden");
+    if (!original?.skipAuthRedirect) {
+      window.location.assign("/forbidden");
+    }
     return Promise.reject(error);
   }
   if (status !== 401 || !original || original._retry || original.url?.includes("/auth/refresh")) return Promise.reject(error);
