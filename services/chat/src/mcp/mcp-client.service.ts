@@ -80,13 +80,22 @@ export class MCPClientService {
 
   async close(): Promise<void> {
     const client = this.client;
+    const transport = this.transport;
+
+    // 先清内部状态，避免 onclose 回调或并发 close 读到半关闭状态。
     this.client = undefined;
     this.transport = undefined;
     this.tools = [];
     this.connected = false;
     this.connectionPromise = undefined;
 
-    if (client) await client.close();
+    try {
+      if (client) await client.close();
+    } finally {
+      // 兜底销毁传输层：client.close() 抛错时，stdio 子进程与管道
+      // 同样必须被回收，不能只依赖 client.close()。
+      await transport?.close().catch(() => undefined);
+    }
   }
 
   isConnected(): boolean {

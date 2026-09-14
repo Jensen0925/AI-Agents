@@ -5,13 +5,13 @@ import {
   loadRequirementAnalysisDataset,
   type RequirementAnalysisEvalCase,
 } from "../eval/dataset-loader";
+import { CHAT_ROOT } from "./script-paths";
 
 /**
  * LangSmith tracing and datasets can upload prompts, inputs, outputs, and token
  * metadata to an external service. Before enabling it for production data,
  * apply the project's data residency, redaction, and access-control policies.
  */
-const CHAT_ROOT = resolve(__dirname, "..");
 const DATASET_NAME = "autix-requirement-analysis";
 const DATASET_PATH = join(
   CHAT_ROOT,

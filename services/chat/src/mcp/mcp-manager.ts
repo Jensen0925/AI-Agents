@@ -1,5 +1,6 @@
 import { DynamicStructuredTool, type StructuredToolInterface } from '@langchain/core/tools';
 import { z } from 'zod';
+import { securityRuntime, ToolPolicyDeniedError } from '../security/security-runtime';
 import type {
   MCPClientService,
   MCPToolCallResult,
@@ -47,10 +48,32 @@ export interface AgentMCPTrace {
 
 export type CanUseTool = (userId: string, toolName: string) => boolean;
 
+/**
+ * 工具调用守卫。由 `securityRuntime` 提供实现：策略白名单（fail-closed）
+ * + 每会话配额 + 超时 + 审计。抽成接口便于测试注入或整体关闭。
+ */
+export interface ToolGuard {
+  guardToolCall<T>(
+    context: {
+      userId: string;
+      toolName: string;
+      intent?: string;
+      conversationId?: string;
+      traceId?: string;
+    },
+    fn: () => Promise<T>,
+  ): Promise<T>;
+}
+
 export interface MCPManagerOptions {
   fallbackTools?: StructuredToolInterface[];
   canUseTool?: CanUseTool;
   logger?: Pick<Console, 'warn'>;
+  /**
+   * 默认接入进程安全运行时。显式传 `null` 可关闭守卫（仅用于不希望
+   * 受配额/审计影响的场景，例如内存测试）。
+   */
+  toolGuard?: ToolGuard | null;
 }
 
 type RegisteredTool = {
@@ -66,17 +89,32 @@ type RegisteredTool = {
  * 在真正发出 MCP tools/call 前都会执行权限检查，并记录可查询的 trace。
  */
 export class MCPManager {
+  /**
+   * trace 环形缓冲上限。Manager 是进程级单例，不裁剪会让 traces 在长跑
+   * 进程内无界增长（同时也是内存 DoS 面）。
+   */
+  private static readonly MAX_TRACES = 500;
+
   private readonly registrations: MCPServerRegistration[] = [];
   private readonly traces: AgentMCPTrace[] = [];
   private readonly unavailableServers = new Map<string, string>();
   private readonly fallbackTools: StructuredToolInterface[];
   private readonly canUseTool: CanUseTool;
   private readonly logger: Pick<Console, 'warn'>;
+  private readonly toolGuard?: ToolGuard;
+  /** trace id 的单调序号：不能再用 traces.length，因为环形裁剪会让它回退。 */
+  private traceSequence = 0;
 
   constructor(options: MCPManagerOptions = {}) {
     this.fallbackTools = options.fallbackTools ?? [];
     this.canUseTool = options.canUseTool ?? defaultCanUseTool;
     this.logger = options.logger ?? console;
+    // 默认启用安全守卫：生产构建路径只有 mcp-bootstrap 一处，
+    // 但默认开启可以避免将来新增构造点忘记接线导致工具调用失去策略约束。
+    this.toolGuard =
+      options.toolGuard === null
+        ? undefined
+        : (options.toolGuard ?? securityRuntime.toolGuard);
   }
 
   registerServer(registration: MCPServerRegistration): this {
@@ -110,15 +148,21 @@ export class MCPManager {
    * 获取经意图裁剪和用户权限过滤后的 LangChain 工具。
    * chat 意图默认返回空数组，避免闲聊把所有 MCP 描述带入上下文。
    */
-  getTools(options: { intent?: MCPToolIntent; userId?: string } = {}): DynamicStructuredTool[] {
+  getTools(
+    options: {
+      intent?: MCPToolIntent;
+      userId?: string;
+      conversationId?: string;
+    } = {},
+  ): DynamicStructuredTool[] {
     const intent = options.intent ?? 'analyze';
-    const userId = options.userId ?? 'system';
+    const userId = options.userId ?? 'anonymous';
     if (intent === 'chat') return [];
 
     return this.listRegisteredTools()
       .filter((tool) => isToolRelevantForIntent(tool.exposedName, intent))
       .filter((tool) => this.canUseTool(userId, tool.exposedName))
-      .map((tool) => this.toLangChainTool(tool, userId, intent));
+      .map((tool) => this.toLangChainTool(tool, userId, intent, options.conversationId));
   }
 
   /** 供 API 或测试直接使用；与 LangChain Tool 共享权限、追踪与降级路径。 */
@@ -127,6 +171,7 @@ export class MCPManager {
     toolName: string,
     args: Record<string, unknown>,
     intent: MCPToolIntent = 'analyze',
+    options: { conversationId?: string } = {},
   ): Promise<string> {
     const tool = this.listRegisteredTools().find((item) => item.exposedName === toolName);
     if (!tool) return this.tryFallback(userId, toolName, args, intent, 'tool_not_found');
@@ -149,12 +194,32 @@ export class MCPManager {
       if (!tool.registration.client.isConnected()) {
         throw new Error(this.unavailableServers.get(tool.registration.name) ?? 'server_not_connected');
       }
-      const result = await tool.registration.client.callTool(tool.definition.name, args);
+      const invokeRemote = () =>
+        tool.registration.client.callTool(tool.definition.name, args);
+      // 经安全守卫：策略白名单 fail-closed + 每会话配额 + 超时 + 审计。
+      const result = this.toolGuard
+        ? await this.toolGuard.guardToolCall(
+            {
+              userId,
+              toolName,
+              intent,
+              conversationId: options.conversationId,
+            },
+            invokeRemote,
+          )
+        : await invokeRemote();
       if (result.isError) throw new Error(serializeMCPContent(result) || 'mcp_tool_error');
       this.finishTrace(trace, 'completed', started);
       return serializeMCPContent(result);
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
+      // 策略拒绝用稳定的错误码而不是本地化消息，保持与 permission_denied /
+      // tool_not_found 一致的机器可读降级形态。
+      const reason =
+        error instanceof ToolPolicyDeniedError
+          ? error.code
+          : error instanceof Error
+            ? error.message
+            : String(error);
       this.finishTrace(trace, 'failed', started, reason);
       return this.tryFallback(userId, toolName, args, intent, reason);
     }
@@ -169,7 +234,21 @@ export class MCPManager {
   }
 
   async closeAll(): Promise<void> {
-    await Promise.all(this.registrations.map((registration) => registration.client.close?.()));
+    // 用 allSettled 而不是 all：裸 Promise.all 会在第一个失败时提前 reject，
+    // 其余注册项是否关闭成功完全不可知，导致 stdio 子进程/传输层泄漏。
+    const results = await Promise.allSettled(
+      this.registrations.map((registration) => registration.client.close?.()),
+    );
+    results.forEach((result, index) => {
+      if (result.status === "rejected") {
+        const name = this.registrations[index]?.name ?? "unknown";
+        const reason =
+          result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason);
+        this.logger.warn(`[MCPManager] failed to close ${name}: ${reason}`);
+      }
+    });
   }
 
   private listRegisteredTools(): RegisteredTool[] {
@@ -195,12 +274,16 @@ export class MCPManager {
     tool: RegisteredTool,
     userId: string,
     intent: MCPToolIntent,
+    conversationId?: string,
   ): DynamicStructuredTool {
     return new DynamicStructuredTool({
       name: tool.exposedName,
       description: tool.definition.description ?? tool.definition.title ?? `MCP tool: ${tool.exposedName}`,
       schema: jsonSchemaToZod(tool.definition.inputSchema),
-      func: (input) => this.callTool(userId, tool.exposedName, input as Record<string, unknown>, intent),
+      func: (input) =>
+        this.callTool(userId, tool.exposedName, input as Record<string, unknown>, intent, {
+          conversationId,
+        }),
     });
   }
 
@@ -230,12 +313,16 @@ export class MCPManager {
   }
 
   private recordTrace(input: Omit<AgentMCPTrace, 'id' | 'startedAt'>): AgentMCPTrace {
+    this.traceSequence += 1;
     const trace: AgentMCPTrace = {
       ...input,
-      id: `mcp_${Date.now()}_${this.traces.length + 1}`,
+      id: `mcp_${Date.now()}_${this.traceSequence}`,
       startedAt: new Date().toISOString(),
     };
     this.traces.push(trace);
+    if (this.traces.length > MCPManager.MAX_TRACES) {
+      this.traces.splice(0, this.traces.length - MCPManager.MAX_TRACES);
+    }
     return trace;
   }
 

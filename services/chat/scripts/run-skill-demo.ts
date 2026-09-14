@@ -1,11 +1,13 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { ChatOpenAI } from '@langchain/openai';
 import { z } from 'zod';
 import { loadLangchainConfig } from '../src/config/load-langchain-config';
 import { normalizeChatBaseURL } from '../src/llm/normalize-base-url';
+import { CHAT_ROOT as ROOT_DIR } from './script-paths';
 
 type ReactAgent = {
   invoke(input: { messages: Array<{ role: string; content: string }> }): Promise<unknown>;
@@ -17,11 +19,13 @@ type CreateReactAgent = (input: {
   prompt: string;
 }) => ReactAgent;
 
-const { createReactAgent } = require('@langchain/langgraph/prebuilt') as {
+// ESM 下没有 CJS 的 require，用 createRequire 复用同一套解析规则。
+const { createReactAgent } = createRequire(import.meta.url)(
+  '@langchain/langgraph/prebuilt',
+) as {
   createReactAgent: CreateReactAgent;
 };
 
-const ROOT_DIR = resolve(__dirname, '..');
 const ENV_PATH = resolve(ROOT_DIR, '.env');
 const SKILLS_DIR = resolve(ROOT_DIR, 'src/skills/definitions');
 

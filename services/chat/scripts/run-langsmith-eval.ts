@@ -20,13 +20,13 @@ import {
   precisionAtK,
   recallAtK,
 } from "../rag/evaluation/retrieval-metrics";
+import { CHAT_ROOT } from "./script-paths";
 
 /**
  * LangSmith tracing uploads prompts, inputs, outputs, and token metadata. Do not
  * enable it for production data before data-residency, redaction, and access
  * controls have been reviewed. The local run-eval.ts remains the CI gate.
  */
-const CHAT_ROOT = resolve(__dirname, "..");
 const DATASET_NAME = "autix-requirement-analysis";
 const DEFAULT_EVAL_USER_ID = "eval-user";
 const DEFAULT_TOP_K = 5;

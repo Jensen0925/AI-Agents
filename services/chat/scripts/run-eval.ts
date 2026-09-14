@@ -13,6 +13,7 @@ import { evalRuns, type JsonValue } from "../src/database/schema";
 import {
   addOverallMetrics,
   aggregateEvaluation,
+  DEFAULT_EVAL_GATES,
   gateDecision,
   type EvaluationCaseDetail,
 } from "../rag/evaluation/aggregate";
@@ -29,8 +30,8 @@ import {
 } from "../eval/dataset-loader";
 import { judgeReport } from "../eval/judge";
 import { formatRetrievedContext } from "../eval/retrieved-context";
+import { CHAT_ROOT } from "./script-paths";
 
-const CHAT_ROOT = resolve(__dirname, "..");
 const DATASET_PATH = join(
   CHAT_ROOT,
   "eval/datasets/requirement-analysis.jsonl",
@@ -359,6 +360,24 @@ async function run(): Promise<boolean> {
       summary = addOverallMetrics(summary, { mrr: mrr(ranked, relevant) });
     }
 
+    // 检索维度是否为「本轮必须产出」：检索-only 模式的意义就是评检索。
+    // 数据集里没有 gold chunk id 时，全部检索指标都会落入 skipped 而门禁仍然
+    // passed，报告是绿的却没有给出任何检索信号，因此这里显式升级为失败。
+    const hasGoldRetrieval = selected.some(
+      (testCase) => (testCase.relevantChunkIds?.length ?? 0) > 0,
+    );
+    const requiredMetrics: string[] = [];
+    if (options.noLlm || hasGoldRetrieval) {
+      requiredMetrics.push("recallAtK", "precisionAtK", "ndcgAtK", "mrr");
+    }
+    if (!hasGoldRetrieval) {
+      console.warn(
+        "[eval] 评测数据集没有任何 relevantChunkIds，检索指标无法产出。" +
+          "请在 eval/datasets/requirement-analysis.jsonl 中为检索类 case 标注" +
+          "与 document_chunks.id 对应的 gold id。",
+      );
+    }
+
     if (process.env.RUN_RAGAS === "1" && model) {
       const ragasSamples = details
         .filter((detail) => detail.summary && detail.input)
@@ -380,7 +399,9 @@ async function run(): Promise<boolean> {
       }
     }
 
-    const gate = gateDecision(summary);
+    const gate = gateDecision(summary, DEFAULT_EVAL_GATES, {
+      required: requiredMetrics,
+    });
     const finishedAt = new Date();
     const modelName = options.noLlm
       ? "retrieval-only"
@@ -413,6 +434,11 @@ async function run(): Promise<boolean> {
     console.log(`[eval] CSV: ${csvPath}`);
     if (!gate.passed) {
       console.error("[eval] gate failed:", JSON.stringify(gate.failures));
+    }
+    if (gate.missing.length > 0) {
+      console.error(
+        `[eval] required metrics missing (evaluated nothing): ${gate.missing.join(", ")}`,
+      );
     }
     if (gate.skipped.length > 0) {
       console.log(`[eval] skipped gates (no results): ${gate.skipped.join(", ")}`);

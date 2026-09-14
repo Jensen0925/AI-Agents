@@ -6,8 +6,8 @@ import { createDeepAgent } from 'deepagents';
 import { z } from 'zod';
 import { loadLangchainConfig } from '../src/config/load-langchain-config';
 import { normalizeChatBaseURL } from '../src/llm/normalize-base-url';
+import { CHAT_ROOT as ROOT_DIR } from './script-paths';
 
-const ROOT_DIR = resolve(__dirname, '..');
 const ENV_PATH = resolve(ROOT_DIR, '.env');
 
 function loadEnvFile(envPath: string): void {
