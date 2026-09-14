@@ -7,6 +7,16 @@
       "types": "./dist/index.d.ts",
       "require": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./ui-protocol": {
+      "types": "./dist/ui-protocol.d.ts",
+      "require": "./dist/ui-protocol.js",
+      "default": "./dist/ui-protocol.js"
+    },
+    "./session": {
+      "types": "./dist/session.d.ts",
+      "require": "./dist/session.js",
+      "default": "./dist/session.js"
     }
   },
   "scripts": {

@@ -6,7 +6,11 @@
     "plugins": [{ "name": "next" }],
     "allowJs": true,
     "baseUrl": ".",
-    "paths": { "@/*": ["./*"] }
+    "paths": {
+      "@/*": ["./*"],
+      "@cloudsage/contracts": ["../../packages/contracts/src/index.ts"],
+      "@cloudsage/contracts/*": ["../../packages/contracts/src/*"]
+    }
   },
   "include": ["next-env.d.ts", ".next/types/**/*.ts", "**/*.ts", "**/*.tsx"],
   "exclude": ["node_modules"]

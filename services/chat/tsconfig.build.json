@@ -9,7 +9,8 @@
     "declaration": false,
     "sourceMap": true,
     "paths": {
-      "@cloudsage/contracts": ["packages/contracts/dist/index.d.ts"]
+      "@cloudsage/contracts": ["packages/contracts/dist/index.d.ts"],
+      "@cloudsage/contracts/*": ["packages/contracts/dist/*"]
     }
   },
   "include": ["src/**/*.ts"],

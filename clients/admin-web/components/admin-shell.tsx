@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { BarChart3, KeyRound, LogOut, Menu, MessageSquareText, ShieldCheck, UserRound, Users, X } from "lucide-react";
 import { api } from "@/lib/api";
-import { clearSession, getCurrentUser, isDemoSession, type SessionUser } from "@/lib/auth";
+import { clearSession, getCurrentUser, getSession, isDemoSession, type SessionUser } from "@/lib/auth";
 
 const navItems = [
   { href: "/dashboard", label: "工作台", icon: BarChart3, permission: "dashboard:read" },
@@ -34,8 +34,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   async function logout() {
     if (!isDemoSession()) {
       try {
-        const raw = window.localStorage.getItem("cloudsage.session");
-        const refreshToken = raw ? (JSON.parse(raw) as { refreshToken?: string }).refreshToken : undefined;
+        // 从统一的读取入口取令牌，避免这里再硬编码一份存储键名。
+        const refreshToken = getSession()?.refreshToken;
         if (refreshToken) await api.post("/auth/logout", { refreshToken });
       } catch {
         // 令牌失效时仍清理本地会话。

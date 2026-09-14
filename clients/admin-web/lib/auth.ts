@@ -1,3 +1,8 @@
+import {
+  DEMO_SESSION_PERMISSIONS,
+  SESSION_STORAGE_KEYS,
+} from "@cloudsage/contracts/session";
+
 export interface SessionUser {
   id: string;
   email: string;
@@ -13,8 +18,9 @@ export interface Session {
   user: SessionUser;
 }
 
-const SESSION_KEY = "cloudsage.session";
-const DEMO_KEY = "cloudsage.demo";
+// admin-web 与 chat-web 可能同域部署，localStorage 按 origin 共享，
+// 因此键名必须带应用前缀，否则两个应用会互相覆盖会话。
+const { session: SESSION_KEY, demo: DEMO_KEY } = SESSION_STORAGE_KEYS.adminWeb;
 
 export function getSession(): Session | null {
   if (typeof window === "undefined") return null;
@@ -42,7 +48,7 @@ export function saveDemoSession(): void {
     email: "admin@cloudsage.local",
     name: "系统管理员",
     roles: ["super_admin"],
-    permissions: ["users:read", "roles:read", "permissions:read", "profile:read", "profile:update"],
+    permissions: [...DEMO_SESSION_PERMISSIONS],
   };
   window.localStorage.setItem(DEMO_KEY, "true");
   window.localStorage.setItem(SESSION_KEY, JSON.stringify({ accessToken: "demo", refreshToken: "demo", expiresIn: 3600, user } satisfies Session));
