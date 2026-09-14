@@ -15,6 +15,13 @@
       "when": 1788156273948,
       "tag": "0001_cynical_millenium_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789365808339,
+      "tag": "0002_flaky_stature",
+      "breakpoints": true
     }
   ]
 }
